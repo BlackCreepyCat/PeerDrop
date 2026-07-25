@@ -1,6 +1,6 @@
 <img width="1357" height="819" alt="image" src="https://github.com/user-attachments/assets/be637c34-e782-4c53-863c-61eb1c43a8f0" />
 
-<img width="1360" height="821" alt="image" src="https://github.com/user-attachments/assets/7d96fb40-d0ae-4712-a654-1dd91b9673d6" />
+<img width="1358" height="821" alt="image" src="https://github.com/user-attachments/assets/1bdbbbab-31a7-4756-9aa9-56d4bd47087e" />
 
 
 # PeerDrop
