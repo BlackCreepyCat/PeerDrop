@@ -1,0 +1,3216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>PeerDrop</title>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"
+    onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';s.crossOrigin='anonymous';document.head.appendChild(s);})()"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /*
+      BASE FONT = 1.875vw  →  at 1440px wide = 27px (original design size)
+      Tout le CSS est en rem — l'interface scale proportionnellement avec la fenêtre.
+      min: 10px (≈533px viewport), max: 28px (≈1493px viewport)
+    */
+    html {
+      font-size: clamp(10px, 1.875vw, 28px);
+    }
+
+    :root {
+      --bg:       #0d0818;
+      --panel:    #140d24;
+      --surface:  #1a1130;
+      --surface2: #21173c;
+      --border:   #2c1f4a;
+      --border2:  #3d2b63;
+      --text:     #ece4fb;
+      --dim:      #6f5f96;
+      --dim2:     #9683c4;
+      --green:    #ff4fc3;
+      --blue:     #9d5cff;
+      --amber:    #ffb238;
+      --red:      #ff3860;
+      --cyan:     #3ff0e0;
+      --glow-pink: rgba(255,79,195,.35);
+      --mono:     'Arial Narrow', Arial, sans-serif;
+      --black:    'Arial Black', Arial, sans-serif;
+    }
+
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font-family: var(--mono);
+      /* Enable safe area env() support on iOS */
+      -webkit-text-size-adjust: 100%;
+    }
+
+    /* ══════════════════════════════════════
+       TITLE BAR
+    ══════════════════════════════════════ */
+    #titlebar {
+      height: 2.67rem; background: #0d0d0d;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 0.89rem; flex-shrink: 0; user-select: none;
+    }
+    .tb-brand {
+      display: flex; align-items: center; gap: 0.3rem;
+      font-size: 1rem; font-weight: 700; letter-spacing: .06em; color: var(--text);
+      font-family: var(--black);
+    }
+    .tb-brand .brand-ver {
+      font-size: 0.78rem; color: var(--dim2); font-weight: 400;
+    }
+
+    #conn-bar {
+      display: none; align-items: center; gap: 0.22rem;
+      font-size: 0.78rem; letter-spacing: .04em; text-transform: none; color: var(--dim2);
+    }
+    .tb-right-group { display: flex; align-items: center; gap: 0.59rem; }
+    .lang-select {
+      font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
+      color: var(--dim2); background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 0.15rem; padding: 0.22rem 0.37rem; cursor: pointer; outline: none;
+      transition: border-color .15s, color .15s;
+    }
+    .lang-select:hover, .lang-select:focus { color: var(--text); border-color: var(--dim); }
+    .lang-select option { background: var(--panel); color: var(--text); }
+    .conn-dot {
+      width: 0.44rem; height: 0.44rem; border-radius: 50%; background: var(--dim); flex-shrink: 0;
+      transition: background .4s, box-shadow .4s;
+    }
+    .conn-dot.waiting { background: var(--dim); animation: blink 1.4s ease-in-out infinite; }
+    .conn-dot.ok      { background: var(--green); box-shadow: 0 0 0.19rem var(--green); animation: none; }
+    .conn-dot.err     { background: var(--red);   box-shadow: 0 0 0.19rem var(--red);   animation: none; }
+    .conn-label       { color: var(--dim2); transition: color .4s; font-weight: 500; }
+    .conn-label.ok    { color: var(--green); }
+    .conn-label.err   { color: var(--red); }
+    .conn-ping        { color: var(--amber); font-size: 0.78rem; }
+
+    /* ══════════════════════════════════════
+       MAIN LAYOUT
+    ══════════════════════════════════════ */
+    #app  { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+    #main { flex: 1; overflow: hidden; position: relative; min-height: 0; }
+
+    .screen { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+    .screen.visible { display: flex; }
+
+    /* ══════════════════════════════════════
+       SCREEN — ROLE SELECTION
+    ══════════════════════════════════════ */
+    #screen-role { align-items: center; justify-content: center; background: var(--bg); }
+    .role-panel {
+      width: min(25.19rem, 96vw);
+      background: var(--panel); border: 1px solid var(--border2);
+      border-radius: 0.22rem; overflow: hidden;
+    }
+    .role-panel-header {
+      padding: 1.04rem 1.33rem 0.74rem;
+      border-bottom: 1px solid var(--border); text-align: center;
+    }
+    .role-panel-title {
+      font-size: 0.93rem; font-weight: 700; letter-spacing: .04em;
+      text-transform: none; color: var(--text); margin-bottom: 0.15rem;
+      font-family: var(--black);
+    }
+    .role-panel-sub { font-size: 0.7rem; color: var(--dim2); letter-spacing: .06em; }
+    .role-btns {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 1px; background: var(--border);
+    }
+    .role-btn {
+      display: flex; flex-direction: column; align-items: flex-start;
+      gap: 0.22rem; padding: 0.89rem 0.74rem;
+      background: var(--panel); border: none; cursor: pointer;
+      transition: background .15s; text-align: left;
+    }
+    .role-btn:hover    { background: var(--surface2); }
+    .role-btn.selected { background: var(--surface2); }
+    .role-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .role-btn .r-icon  { display: flex; color: var(--green); line-height: 1; }
+    .role-btn .r-label { font-size: 0.81rem; font-weight: 700; letter-spacing: .04em; text-transform: none; color: var(--text); font-family: var(--black); }
+    .role-btn .r-desc  { font-size: 0.63rem; color: var(--dim2); letter-spacing: .02em; white-space: normal; line-height: 1.3; }
+
+    /* Global tooltip — appended to body, above all overflow contexts */
+    #role-tooltip {
+      display: none; position: fixed; z-index: 9999; pointer-events: none;
+      background: #1a1a1a; border: 1px solid var(--border2);
+      border-radius: 0.22rem; padding: 0.52rem 0.67rem;
+      width: 14rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,.6);
+    }
+    #role-tooltip.visible { display: block; }
+    #role-tooltip::after {
+      content: ''; position: absolute; top: 100%; left: 50%;
+      transform: translateX(-50%);
+      border: 0.3rem solid transparent;
+      border-top-color: var(--border2);
+    }
+    /* When tooltip flips below the button, arrow points upward */
+    #role-tooltip.flipped::after {
+      top: auto; bottom: 100%;
+      border-top-color: transparent;
+      border-bottom-color: var(--border2);
+    }
+    .role-tooltip-title {
+      font-size: 0.67rem; font-weight: 700; letter-spacing: .04em;
+      text-transform: none; color: var(--text); margin-bottom: 0.3rem;
+      font-family: var(--black);
+    }
+    .role-tooltip-line {
+      display: flex; align-items: flex-start; gap: 0.3rem;
+      font-size: 0.56rem; color: var(--dim2); letter-spacing: .03em;
+      line-height: 1.45; margin-bottom: 0.15rem;
+    }
+    .role-tooltip-line .tt-dot { color: var(--green); flex-shrink: 0; margin-top: 0.04rem; }
+    .role-tooltip-line:last-child { margin-bottom: 0; }
+
+    .role-edge-note {
+      margin-top: 0.67rem; padding: 0.52rem 0.89rem;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 0.44rem;
+      font-size: 0.56rem; color: var(--dim2); letter-spacing: .04em; line-height: 1.4;
+    }
+    .role-edge-note .edge-icon { display: inline-flex; align-items: center; color: var(--amber); flex-shrink: 0; }
+    .role-hint { padding: 0.59rem 1.33rem; border-top: 1px solid var(--border); font-size: 0.59rem; color: var(--dim2); letter-spacing: .06em; text-align: center; }
+
+    /* Small screens: role buttons go vertical */
+    @media (max-width: 480px) {
+      .role-btns { grid-template-columns: 1fr; }
+      .role-btn  { flex-direction: row; align-items: center; gap: 0.52rem; padding: 0.67rem 0.74rem; }
+      .role-btn .r-icon { flex-shrink: 0; }
+    }
+
+    /* ══════════════════════════════════════
+       TOOLBAR
+    ══════════════════════════════════════ */
+    .toolbar {
+      min-height: 2.96rem; background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.3rem 0.74rem; gap: 0.52rem; flex-shrink: 0; flex-wrap: wrap;
+    }
+    .toolbar-left  { display: flex; align-items: center; gap: 0.52rem; flex-wrap: wrap; }
+    .toolbar-right { display: flex; align-items: center; gap: 0.22rem; flex-wrap: wrap; }
+
+    .session-block { display: flex; align-items: center; gap: 0.3rem; }
+    .sess-label    { font-size: 0.7rem; color: var(--dim); letter-spacing: .04em; text-transform: none; font-weight: 600; }
+    .code-pill {
+      font-size: 1.11rem; font-weight: 700; letter-spacing: .35em;
+      color: var(--green); background: rgba(255,79,195,.08);
+      border: 1px solid rgba(255,79,195,.25); border-radius: 0.15rem;
+      padding: 0.15rem 0.6rem; cursor: pointer; min-width: 7rem; text-align: center;
+      transition: background .15s, border-color .15s;
+    }
+    .code-pill:hover { background: rgba(255,79,195,.15); border-color: rgba(255,79,195,.5); }
+
+    .queue-count {
+      font-size: 0.78rem; color: var(--amber); letter-spacing: .08em;
+      background: rgba(255,178,56,.08); border: 1px solid rgba(255,178,56,.25);
+      border-radius: 0.11rem; padding: 0.11rem 0.3rem; font-weight: 600;
+    }
+    .queue-count.hidden { display: none; }
+
+    .tb-btn {
+      padding: 0.37rem 0.74rem; font-family: var(--mono); font-size: 0.78rem;
+      font-weight: 600; letter-spacing: .04em; text-transform: none;
+      background: var(--surface2); color: var(--dim2);
+      border: 1px solid var(--border2); border-radius: 0.11rem; cursor: pointer;
+      transition: background .12s, color .12s, border-color .12s; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .tb-btn:hover   { background: var(--surface2); color: var(--text); border-color: #3a3a3a; }
+    .tb-btn:active  { transform: translateY(1px); }
+    .tb-btn:disabled { opacity: .3; cursor: not-allowed; transform: none; }
+    .tb-btn.primary { background: rgba(255,79,195,.12); color: var(--green); border-color: rgba(255,79,195,.35); }
+    .tb-btn.primary:hover:not(:disabled) { background: rgba(255,79,195,.2); border-color: rgba(255,79,195,.6); box-shadow: 0 0 0.7rem var(--glow-pink); }
+    .tb-btn.danger  { color: var(--red); border-color: rgba(255,56,96,.25); background: rgba(255,56,96,.06); }
+    .tb-btn.danger:hover { border-color: rgba(255,56,96,.5); background: rgba(255,56,96,.12); }
+    .btn-ico { display: inline-flex; flex-shrink: 0; }
+
+    /* SHA-256 toggle */
+    .tb-toggle {
+      display: flex; align-items: center; gap: 0.22rem; cursor: pointer;
+      font-size: 0.78rem; color: var(--dim2); letter-spacing: .06em;
+      font-weight: 600; text-transform: none; user-select: none;
+      padding: 0.3rem 0.52rem; border: 1px solid var(--border2); border-radius: 0.11rem;
+      background: var(--surface2); transition: border-color .15s, color .15s;
+    }
+    .tb-toggle:hover { border-color: #3a3a3a; color: var(--text); }
+    .tb-toggle input { display: none; }
+    .tb-toggle-track {
+      width: 0.96rem; height: 0.52rem; border-radius: 0.26rem; flex-shrink: 0;
+      background: var(--border2); position: relative;
+      transition: background .2s; border: 1px solid #333;
+    }
+    .tb-toggle-track::after {
+      content: ''; position: absolute; top: 0.07rem; left: 0.07rem;
+      width: 0.37rem; height: 0.37rem; border-radius: 50%;
+      background: var(--dim); transition: left .2s, background .2s;
+    }
+    .tb-toggle input:checked ~ .tb-toggle-track { background: rgba(255,79,195,.2); border-color: rgba(255,79,195,.4); }
+    .tb-toggle input:checked ~ .tb-toggle-track::after { left: 0.52rem; background: var(--green); }
+    .tb-toggle input:checked ~ .tb-toggle-label { color: var(--green); }
+    .tb-toggle-label { transition: color .2s; }
+
+    .srv-clients-badge {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: .04em; text-transform: none;
+      color: var(--cyan); background: rgba(63,240,224,.08);
+      border: 1px solid rgba(63,240,224,.25); border-radius: 0.11rem;
+      padding: 0.15rem 0.44rem; transition: color .3s;
+    }
+    .srv-clients-badge.active { color: var(--green); background: rgba(255,79,195,.08); border-color: rgba(255,79,195,.3); }
+
+    /* ══════════════════════════════════════
+       FILE TABLE
+    ══════════════════════════════════════ */
+    .file-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .file-table-header {
+      display: grid;
+      grid-template-columns: 0.89rem 1fr 2.96rem 4.44rem 5.19rem 0.89rem;
+      gap: 0 0.52rem; align-items: center;
+      padding: 0.37rem 0.81rem;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      font-size: 0.7rem; font-weight: 700; letter-spacing: .04em;
+      text-transform: none; color: var(--dim); flex-shrink: 0;
+    }
+
+    .file-queue {
+      flex: 1; overflow-y: auto; background: var(--bg);
+      display: flex; flex-direction: column;
+    }
+    .file-queue::-webkit-scrollbar { width: 0.15rem; }
+    .file-queue::-webkit-scrollbar-track { background: transparent; }
+    .file-queue::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 0.07rem; }
+
+    .fq-item {
+      display: grid;
+      grid-template-columns: 0.89rem 1fr 2.96rem 4.44rem 5.19rem 0.89rem;
+      grid-template-rows: auto auto;
+      gap: 0 0.52rem; align-items: center;
+      padding: 0.52rem 0.81rem 0.3rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg); transition: background .12s; flex-shrink: 0;
+    }
+    .fq-item:hover     { background: #0f0f0f; }
+    .fq-item.active    { background: rgba(157,92,255,.04); border-left: 2px solid var(--blue); padding-left: 0.37rem; }
+    .fq-item.done      { background: rgba(255,79,195,.03); }
+    .fq-item.paused    { background: rgba(255,178,56,.03); border-left: 2px solid var(--amber); padding-left: 0.37rem; }
+    .fq-item.confirmed { background: rgba(255,79,195,.04); border-left: 2px solid var(--green); padding-left: 0.37rem; }
+
+    .fq-icon-sm { display: inline-flex; align-items: center; color: var(--dim2); }
+    .fq-name    { font-size: 0.85rem; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fq-size    { font-size: 0.78rem; color: var(--dim2); text-align: right; }
+    .fq-st      { font-size: 0.7rem;  font-weight: 700; letter-spacing: .04em; text-transform: none; white-space: nowrap; }
+    .fq-st.sending   { color: var(--blue); }
+    .fq-st.done      { color: var(--green); }
+    .fq-st.confirmed { color: var(--green); }
+    .fq-st.paused    { color: var(--amber); }
+
+    .fq-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--dim); padding: 0.07rem 0.15rem;
+      border-radius: 0.07rem; transition: color .12s, background .12s; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .fq-remove:hover { color: var(--red); background: rgba(255,56,96,.1); }
+    .fq-item.active .fq-remove,
+    .fq-item.done .fq-remove,
+    .fq-item.confirmed .fq-remove { display: none; }
+
+    .fq-prow { grid-column: 1 / -1; margin-top: 0.22rem; }
+    .mini-track { width: 100%; height: 0.44rem; background: var(--border2); border-radius: 0.22rem; overflow: hidden; }
+    .mini-bar {
+      height: 100%; background: var(--blue);
+      transform-origin: left; transform: scaleX(0);
+      transition: transform .15s linear; border-radius: 0.22rem;
+    }
+    .fq-item.done .mini-bar,
+    .fq-item.confirmed .mini-bar { background: var(--green); }
+    .fq-item.paused .mini-bar    { background: var(--amber); }
+
+    .sha-badge {
+      display: inline-flex; align-items: center; gap: 0.11rem;
+      font-size: 0.37rem; font-weight: 700; letter-spacing: .06em;
+      padding: 0.11rem 0.22rem; border-radius: 0.11rem; font-family: var(--mono);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: color .25s, border-color .25s, background .25s;
+    }
+    .sha-badge.waiting { color: var(--dim);   border: 1px solid var(--border2);          background: transparent; }
+    .sha-badge.hashing { color: var(--amber); border: 1px solid rgba(255,178,56,.3);      background: rgba(255,178,56,.05); }
+    .sha-badge.ok      { color: var(--green); border: 1px solid rgba(255,79,195,.3);       background: rgba(255,79,195,.06); }
+    .sha-badge.err     { color: var(--red);   border: 1px solid rgba(255,56,96,.3);       background: rgba(255,56,96,.06); }
+
+    /* ── DROPZONE ── */
+    .dropzone {
+      margin: 0.44rem; flex-shrink: 0;
+      border: 1px dashed rgba(255,79,195,.35); border-radius: 0.15rem;
+      padding: 1.19rem 0.59rem; text-align: center;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 0.3rem; cursor: pointer;
+      position: relative;
+      animation: recv-pulse 2.4s ease-in-out infinite;
+      transition: border-color .15s, background .15s;
+    }
+    .dropzone:hover, .dropzone.drag-over {
+      background: rgba(255,79,195,.12) !important;
+      border-color: rgba(255,79,195,.8) !important;
+      box-shadow: inset 0 0 1.19rem rgba(255,79,195,.1) !important;
+      animation: none;
+    }
+    .dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .dz-icon {
+      font-size: 1.63rem; color: var(--green);
+      animation: recv-icon-pulse 2.4s ease-in-out infinite;
+    }
+    .dz-text {
+      font-size: 0.78rem; color: var(--green); letter-spacing: .04em;
+      text-transform: none; font-weight: 700; font-family: var(--black);
+      opacity: .7; animation: recv-icon-pulse 2.4s ease-in-out infinite;
+    }
+    .dropzone:hover .dz-icon, .dropzone:hover .dz-text,
+    .dropzone.drag-over .dz-icon, .dropzone.drag-over .dz-text { opacity: 1; animation: none; }
+
+    #recv-dropzone {
+      margin: 0.44rem; flex-shrink: 0;
+      border: 1px dashed rgba(255,79,195,.35); border-radius: 0.15rem;
+      padding: 1.19rem 0.59rem;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 0.37rem;
+      animation: recv-pulse 2.4s ease-in-out infinite;
+    }
+    #recv-dropzone.hidden { display: none; }
+    .recv-dz-icon { font-size: 1.63rem; line-height: 1; color: var(--green); animation: recv-icon-pulse 2.4s ease-in-out infinite; }
+    .recv-dz-text { font-size: 0.78rem; color: var(--green); letter-spacing: .04em; text-transform: none; font-weight: 700; font-family: var(--black); opacity: .7; animation: recv-icon-pulse 2.4s ease-in-out infinite; }
+    .recv-dz-sub  { font-size: 0.63rem; color: var(--dim2); letter-spacing: .04em; text-transform: none; }
+
+    @keyframes recv-pulse {
+      0%,100% { background: rgba(255,79,195,.02); border-color: rgba(255,79,195,.2); box-shadow: none; }
+      50%      { background: rgba(255,79,195,.07); border-color: rgba(255,79,195,.6); box-shadow: inset 0 0 0.89rem rgba(255,79,195,.06); }
+    }
+    @keyframes recv-icon-pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
+
+    /* ══════════════════════════════════════
+       RECEIVER LAYOUT
+    ══════════════════════════════════════ */
+    .recv-form {
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      padding: 0.59rem 0.74rem; flex-shrink: 0;
+      transition: padding .2s;
+    }
+    /* ── recv-form base styles ── */
+    .recv-form-inner {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 0.37rem; flex-wrap: wrap;
+    }
+    .recv-row  { display: flex; align-items: flex-end; gap: 0.37rem; flex-wrap: wrap; }
+    .recv-field { display: flex; flex-direction: column; gap: 0.19rem; }
+    .field-label, .sess-label {
+      font-size: 0.7rem; color: var(--dim); letter-spacing: .04em;
+      text-transform: none; font-weight: 700;
+    }
+
+    /* ── Minimized form (once connected) ── */
+    .recv-form.minimized { padding: 0.3rem 0.74rem; }
+    .recv-form.minimized .recv-form-inner { display: none; }
+    .recv-form-mini {
+      display: none; align-items: center; gap: 0.44rem; flex-wrap: wrap;
+      font-size: 0.7rem; color: var(--dim2);
+    }
+    .recv-form.minimized .recv-form-mini { display: flex; }
+    .recv-mini-code { color: var(--green); font-weight: 700; letter-spacing: .25em; }
+    .recv-mini-expand {
+      margin-left: auto; padding: 0.15rem 0.44rem;
+      font-family: var(--mono); font-size: 0.63rem; font-weight: 600;
+      letter-spacing: .04em; text-transform: none;
+      background: var(--surface2); color: var(--dim2);
+      border: 1px solid var(--border2); border-radius: 0.11rem;
+      cursor: pointer; transition: color .12s, border-color .12s;
+      display: inline-flex; align-items: center; gap: 0.22rem;
+    }
+    .recv-mini-expand:hover { color: var(--text); border-color: #3a3a3a; }
+
+    /* ── rfl-footer always visible ── */
+    .rfl-footer {
+      padding: 0.52rem 0.81rem; background: var(--panel);
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0; gap: 0.44rem; flex-wrap: wrap;
+      position: sticky; bottom: 0; z-index: 2;
+    }
+    .rfl-sel-count { font-size: 0.7rem; color: var(--dim2); letter-spacing: .08em; }
+    .rfl-sel-count span { color: var(--green); font-weight: 700; }
+
+    /* ── Mobile ── */
+    @media (max-width: 600px) {
+      .recv-form-inner { flex-direction: column; gap: 0.44rem; }
+      .recv-row { flex-direction: column; align-items: stretch; gap: 0.44rem; width: 100%; }
+      /* Each field: label left (fixed width) + control right */
+      .recv-field {
+        flex-direction: row; align-items: center; gap: 0.44rem; flex-wrap: nowrap;
+      }
+      .recv-field .field-label { flex-shrink: 0; width: 5.8rem; }
+      .recv-field input[type="text"] { flex: 1; min-width: 0; width: auto; }
+      /* Connect button full width below */
+      #btn-connect { width: 100%; text-align: center; }
+      /* Dir row fills remaining width */
+      .recv-field .dir-row { flex: 1; min-width: 0; }
+      .dir-path { flex: 1; min-width: 0; max-width: none; font-size: 0.67rem; }
+      /* Clear button full width */
+      #btn-clear-recv { width: 100%; text-align: center; align-self: stretch; margin-top: 0.15rem; }
+      /* Bigger tap targets */
+      .tb-btn, .btn-dir { min-height: 2.4rem; }
+      .rfl-item { padding: 0.74rem 0.59rem; gap: 0.52rem; }
+      .rfl-footer { padding: 0.44rem 0.59rem; }
+      #btn-rfl-download { flex: 1; text-align: center; }
+      .sb-item:not(.sb-green) { display: none; }
+      .sb-sep { display: none; }
+    }
+    @media (max-width: 380px) {
+      /* Very small: stack label above control */
+      .recv-field { flex-direction: column; align-items: flex-start; }
+      .recv-field .field-label { width: auto; }
+      .recv-field input[type="text"] { width: 100%; }
+      .recv-field .dir-row { width: 100%; }
+    }
+
+    input[type="text"] {
+      padding: 0.37rem 0.41rem; font-family: var(--mono);
+      font-size: 0.78rem; font-weight: 700; letter-spacing: .35em;
+      color: var(--green); text-transform: uppercase;
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 0.11rem; outline: none; width: 8.15rem;
+      transition: border-color .15s, background .15s;
+      /* iOS auto-zoom prevention — browser zooms when font-size < 16px */
+      -webkit-text-size-adjust: none;
+    }
+    @media (max-width: 600px) {
+      input[type="text"] { font-size: max(0.78rem, 16px); }
+    }
+    input[type="text"]::placeholder { color: rgba(255,79,195,.2); }
+    input[type="text"]:focus { border-color: rgba(255,79,195,.5); background: rgba(255,79,195,.05); }
+
+    .dir-row  { display: flex; align-items: center; gap: 0.22rem; flex-wrap: wrap; }
+    .btn-dir  {
+      padding: 0.37rem 0.44rem; font-family: var(--mono); font-size: 0.78rem;
+      font-weight: 600; letter-spacing: .04em; text-transform: none;
+      background: var(--surface2); color: var(--dim2);
+      border: 1px solid var(--border2); border-radius: 0.11rem; cursor: pointer;
+      transition: background .12s, color .12s, border-color .12s; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .btn-dir:hover  { background: var(--surface); color: var(--text); border-color: #3a3a3a; }
+    .btn-dir.chosen { border-color: rgba(255,79,195,.4); color: var(--green); background: rgba(255,79,195,.05); }
+    .dir-path { font-size: 0.78rem; color: var(--dim2); max-width: 32rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dir-path.has-dir { color: var(--green); cursor: pointer; border-bottom: 1px dashed rgba(255,79,195,.35); transition: color .15s, border-color .15s; }
+    .dir-path.has-dir:hover { color: #4ade80; border-color: rgba(255,79,195,.8); }
+    .dir-path.has-dir::after { content: ' ↗'; font-size: 0.63rem; opacity: .6; }
+
+    .done-banner {
+      display: flex; align-items: center; gap: 0.3rem;
+      margin: 0.3rem 0.44rem; padding: 0.37rem 0.52rem;
+      background: rgba(255,79,195,.06); border: 1px solid rgba(255,79,195,.25);
+      border-radius: 0.15rem; font-size: 0.7rem; font-weight: 600; color: var(--green);
+    }
+    .done-banner .done-detail { font-size: 0.63rem; color: var(--dim2); font-weight: 400; margin-left: auto; }
+
+    /* ══════════════════════════════════════
+       PROGRESS GLOBAL
+    ══════════════════════════════════════ */
+    .progress-wrap {
+      padding: 0.52rem 0.74rem; flex-shrink: 0;
+      border-top: 1px solid var(--border); background: var(--panel);
+    }
+    .progress-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.19rem; }
+    .progress-label span:first-child {
+      font-size: 0.59rem; color: var(--text); font-weight: 500;
+      letter-spacing: .04em; white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; max-width: 60%;
+    }
+    .pct { font-size: 0.63rem; color: var(--blue); font-weight: 700; }
+    #recv-speed { font-size: 0.59rem; color: var(--dim2); font-weight: 400; letter-spacing: .04em; }
+    .progress-track { height: 0.37rem; background: var(--border2); border-radius: 0.19rem; position: relative; overflow: hidden; }
+    .progress-bar {
+      position: absolute; inset: 0; background: var(--blue);
+      transform-origin: left; transform: scaleX(0);
+      transition: transform .2s ease; border-radius: 0.19rem;
+    }
+
+    /* ══════════════════════════════════════
+       STATUS LINE
+    ══════════════════════════════════════ */
+    .status {
+      padding: 0.37rem 0.81rem; font-size: 0.59rem; letter-spacing: .1em;
+      text-transform: none; color: var(--dim2); font-weight: 600;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      min-height: 1.11rem; flex-shrink: 0;
+    }
+    .status.ok   { color: var(--green); }
+    .status.err  { color: var(--red); }
+    .status.info { color: var(--amber); }
+    .status.pulse { animation: blink 1.4s ease-in-out infinite; }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ══════════════════════════════════════
+       STATUS BAR (bottom)
+    ══════════════════════════════════════ */
+    #statusbar {
+      height: 1.63rem; background: #090909;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 0.89rem; padding-bottom: env(safe-area-inset-bottom, 0px);
+      gap: 0.52rem; flex-shrink: 0;
+    }
+    .sb-item  { font-size: 0.56rem; color: var(--dim); letter-spacing: .04em; text-transform: none; }
+    .sb-sep   { font-size: 0.56rem; color: var(--border2); }
+    .sb-green { color: var(--green); }
+
+    /* ══════════════════════════════════════
+       SERVER MODE STYLES
+    ══════════════════════════════════════ */
+    #srv-receivers-panel {
+      flex-shrink: 0; background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: none; flex-direction: column;
+    }
+    #srv-receivers-panel.visible { display: flex; }
+    .srv-recv-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.3rem 0.81rem; border-bottom: 1px solid var(--border);
+    }
+    .srv-recv-title { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.63rem; font-weight: 700; letter-spacing: .04em; text-transform: none; color: var(--cyan); font-family: var(--black); }
+    .srv-recv-list { display: flex; flex-direction: column; max-height: 8.15rem; overflow-y: auto; }
+    .srv-recv-list::-webkit-scrollbar { width: 0.15rem; }
+    .srv-recv-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 0.07rem; }
+
+    .srv-recv-item {
+      display: grid;
+      grid-template-columns: 1.93rem 1fr 2.59rem 4.07rem 4.07rem;
+      gap: 0 0.44rem; align-items: center;
+      padding: 0.3rem 0.81rem 0.22rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg); flex-shrink: 0;
+    }
+    .srv-recv-item:last-child { border-bottom: none; }
+    .srv-recv-item.disconnected { opacity: .38; }
+    .srv-recv-id {
+      font-size: 0.48rem; font-weight: 700; letter-spacing: .12em;
+      color: var(--cyan); font-family: var(--black); text-transform: none;
+    }
+    .srv-recv-item.disconnected .srv-recv-id { color: var(--dim); }
+    .srv-recv-prog-wrap { display: flex; flex-direction: column; gap: 0.11rem; min-width: 0; }
+    .srv-recv-filename  { font-size: 0.59rem; color: var(--dim2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .03em; }
+    .srv-recv-track { width: 100%; height: 0.3rem; background: var(--border2); border-radius: 0.15rem; overflow: hidden; }
+    .srv-recv-bar   { height: 100%; background: var(--cyan); transform-origin: left; transform: scaleX(0); transition: transform .18s linear; border-radius: 0.15rem; }
+    .srv-recv-bar.done { background: var(--green); }
+    .srv-recv-pct   { font-size: 0.63rem; font-weight: 700; color: var(--cyan); letter-spacing: .06em; text-align: right; }
+    .srv-recv-pct.done { color: var(--green); }
+    .srv-recv-speed { font-size: 0.56rem; color: var(--dim); letter-spacing: .04em; }
+
+    .srv-ack-badge {
+      display: inline-flex; align-items: center; gap: 0.15rem;
+      font-size: 0.56rem; font-weight: 700; letter-spacing: .08em;
+      padding: 0.11rem 0.3rem; border-radius: 0.11rem; font-family: var(--mono);
+      white-space: nowrap; text-transform: none;
+      transition: color .25s, border-color .25s, background .25s;
+    }
+    .srv-ack-badge.waiting { color: var(--dim);   border: 1px solid var(--border2); background: transparent; }
+    .srv-ack-badge.sending { color: var(--blue);  border: 1px solid rgba(157,92,255,.3);  background: rgba(157,92,255,.06); }
+    .srv-ack-badge.ok      { color: var(--green); border: 1px solid rgba(255,79,195,.3);   background: rgba(255,79,195,.06); }
+    .srv-ack-badge.partial { color: var(--amber); border: 1px solid rgba(255,178,56,.3);  background: rgba(255,178,56,.06); }
+    .srv-ack-badge.all-ok  { color: var(--green); border: 1px solid rgba(255,79,195,.5);   background: rgba(255,79,195,.1); box-shadow: 0 0 0.22rem rgba(255,79,195,.2); }
+
+    /* ══════════════════════════════════════
+       RECEIVER FILELIST (SERVER MODE)
+    ══════════════════════════════════════ */
+    .recv-filelist-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+    .rfl-header {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      padding: 0.52rem 0.81rem; background: var(--panel);
+      border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 0.37rem;
+    }
+    .rfl-title   { font-size: 0.78rem; font-weight: 700; letter-spacing: .04em; text-transform: none; color: var(--text); font-family: var(--black); }
+    .rfl-actions { display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+    .rfl-list    { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+    .rfl-list::-webkit-scrollbar { width: 0.15rem; }
+    .rfl-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 0.07rem; }
+    .rfl-item {
+      display: flex; align-items: center; gap: 0.44rem;
+      padding: 0.52rem 0.81rem; border-bottom: 1px solid var(--border);
+      background: var(--bg); transition: background .12s; cursor: pointer; flex-shrink: 0;
+    }
+    .rfl-item:hover    { background: #0f0f0f; }
+    .rfl-item.selected { background: rgba(255,79,195,.04); }
+    .rfl-cb   { width: 0.74rem; height: 0.74rem; flex-shrink: 0; cursor: pointer; accent-color: var(--green); border-radius: 0.11rem; }
+    .rfl-icon { display: inline-flex; align-items: center; color: var(--dim2); flex-shrink: 0; }
+    .rfl-name { flex: 1; font-size: 0.85rem; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rfl-size { font-size: 0.78rem; color: var(--dim2); flex-shrink: 0; }
+
+    .fq-item:nth-child(even)       { background: #0e0e0e; }
+    .fq-item:nth-child(even):hover { background: #121212; }
+    .rfl-item:nth-child(even)      { background: #0e0e0e; }
+    .rfl-item:nth-child(even):hover{ background: #121212; }
+    .srv-recv-item:nth-child(even) { background: #0e0e0e; }
+
+    button { font-family: var(--mono); }
+
+    /* ══════════════════════════════════════
+       RESPONSIVE — MOBILE & TABLETTE
+    ══════════════════════════════════════ */
+    /* Tablette : légère respiration supplémentaire sur les zones denses */
+    @media (max-width: 900px) {
+      .toolbar { padding: 0.44rem 0.59rem; }
+      .srv-recv-item { grid-template-columns: 1.93rem 1fr 2.59rem 3.4rem; }
+      .srv-recv-speed { display: none; }
+    }
+
+    /* Mobile : colonne Hash retirée des tableaux de fichiers pour gagner de la place,
+       boutons de la toolbar sur toute la largeur si nécessaire, listes de destinataires compactées */
+    @media (max-width: 640px) {
+      .file-table-header,
+      .fq-item {
+        grid-template-columns: 0.89rem 1fr 2.96rem 4.44rem 0.89rem;
+      }
+      .file-table-header span:nth-child(5) { display: none; }
+      .sha-badge { display: none; }
+
+      .toolbar { gap: 0.37rem; }
+      .toolbar-left, .toolbar-right { gap: 0.37rem; }
+      .tb-btn, .tb-toggle { padding: 0.44rem 0.59rem; min-height: 2.15rem; }
+      .code-pill { min-width: 6rem; font-size: 1rem; }
+
+      .srv-recv-item { grid-template-columns: 1.93rem 1fr 2.59rem; gap: 0 0.3rem; }
+      .srv-recv-list { max-height: none; }
+
+      .role-panel { width: 96vw; }
+      .role-edge-note { font-size: 0.63rem; }
+
+      .rfl-size { display: none; }
+    }
+
+    /* Très petits écrans (téléphones étroits) */
+    @media (max-width: 400px) {
+      #titlebar { padding: 0 0.52rem; }
+      .tb-brand span:not(.brand-ver) { font-size: 0.9rem; }
+      .srv-clients-badge { font-size: 0.63rem; }
+      .file-table-header,
+      .fq-item {
+        grid-template-columns: 0.89rem 1fr 3.33rem 0.89rem;
+      }
+      .file-table-header span:nth-child(3) { display: none; }
+      .fq-size { display: none; }
+    }
+
+    /* Tap targets confortables sur écrans tactiles */
+    @media (hover: none) and (pointer: coarse) {
+      .tb-btn, .btn-dir, .role-btn, .rfl-item, .fq-remove { min-height: 2.2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ═══ TITLE BAR ═══ -->
+  <div id="titlebar">
+    <div class="tb-brand">
+      <img src="https://www.creepycat.fr/images/logo_only.png" alt="Creepy Cat" style="height:1.19rem;width:auto;">
+      <span>PeerDrop</span>
+      <span class="brand-ver">v2.0</span>
+    </div>
+    <div class="tb-right-group">
+      <select id="lang-select" class="lang-select" onchange="setLang(this.value)" data-i18n-title="lang_label" data-i18n-aria-label="lang_label" aria-label="Language">
+        <option value="fr">Français</option>
+        <option value="en">English</option>
+        <option value="it">Italiano</option>
+        <option value="pt">Português</option>
+        <option value="es">Español</option>
+        <option value="ru">Русский</option>
+      </select>
+      <div id="conn-bar">
+        <span class="conn-dot waiting" id="conn-dot"></span>
+        <span class="conn-label" id="conn-label">Connecting</span>
+        <span class="conn-ping" id="conn-ping"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MAIN ═══ -->
+  <div id="main">
+
+    <!-- ── SCREEN 0 : Role selection ── -->
+    <div class="screen visible" id="screen-role">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:0.74rem;">
+        <div class="role-panel">
+          <div class="role-panel-header">
+            <div class="role-panel-title" style="color:var(--green)" data-i18n="role_title">Choose a mode</div>
+            <div class="role-panel-sub" data-i18n="role_sub">Direct WebRTC · No server · No upload limit</div>
+          </div>
+          <div class="role-btns">
+            <button class="role-btn" id="btn-receiver" onclick="chooseRole('receiver')" data-tooltip="receiver">
+              <span class="r-icon" id="ico-role-receive"></span>
+              <span class="r-label" data-i18n="role_receive_label">Receive</span>
+              <span class="r-desc" data-i18n="role_receive_desc">Download from a server</span>
+            </button>
+            <button class="role-btn" id="btn-server" onclick="chooseRole('server')" data-tooltip="server">
+              <span class="r-icon" id="ico-role-server" style="color:var(--cyan)"></span>
+              <span class="r-label" data-i18n="role_server_label">Server</span>
+              <span class="r-desc" data-i18n="role_server_desc">Host a file library for multiple peers</span>
+            </button>
+          </div>
+          <div class="role-hint status pulse" data-i18n="role_hint">Hover or tap a mode for details · Click to get started</div>
+          <div class="role-edge-note">
+            <span class="edge-icon" id="ico-edge"></span>
+            <span data-i18n="edge_note">Microsoft Edge recommended — Edge supports the File System Access API, allowing received files to be saved directly to a chosen output folder without individual download dialogs. Other browsers will fall back to standard per-file downloads.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN RECEIVER ── -->
+    <div class="screen" id="screen-receiver">
+
+      <!-- Connect form -->
+      <div class="recv-form">
+        <div class="recv-form-inner" style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="recv-row">
+          <div class="recv-field">
+            <span class="field-label" data-i18n="recv_code_label">Server code</span>
+            <input type="text" id="peer-code" placeholder="XXXXXX" maxlength="6"
+              oninput="this.value=this.value.toUpperCase()"
+              onkeydown="if(event.key==='Enter')connectToPeer()" />
+          </div>
+          <button class="tb-btn primary large" id="btn-connect" onclick="connectToPeer()" style="align-self:flex-end" data-i18n="recv_connect_btn">Connect</button>
+          <div class="recv-field">
+            <span class="field-label" data-i18n="recv_folder_label">Download folder</span>
+            <div class="dir-row">
+              <button class="btn-dir" id="btn-dir" onclick="pickDirectory()"><span class="btn-ico" id="ico-dir-choose"></span><span data-i18n="recv_dir_choose">Choose</span></button>
+              <span class="dir-path" id="dir-path" onclick="onDirPathClick()" data-i18n="recv_dir_auto">Auto-download (no folder selected)</span>
+              <button class="btn-dir" id="btn-dir-clear" onclick="clearDirectory()" data-i18n-title="recv_dir_clear_title" style="display:none;padding:0.3rem 0.44rem;color:var(--dim)"><span class="btn-ico" id="ico-dir-clear"></span></button>
+            </div>
+          </div>
+        </div>
+        <button class="tb-btn danger" id="btn-clear-recv" onclick="clearReceived()"
+          style="display:none;flex-shrink:0;align-self:center"><span class="btn-ico" id="ico-clear-recv"></span><span data-i18n="recv_clear_btn">Clear received</span></button>
+        </div>
+        <!-- Mini bar shown when connected — collapses the form to save vertical space on mobile -->
+        <div class="recv-form-mini" id="recv-form-mini">
+          <span style="color:var(--dim2);font-size:0.7rem;letter-spacing: .04em;text-transform: none;font-weight:600" data-i18n="recv_connected_to">Connected to</span>
+          <span class="recv-mini-code" id="recv-mini-code"></span>
+          <span id="recv-mini-folder" style="font-size:0.63rem;color:var(--dim2)"></span>
+          <button class="recv-mini-expand" onclick="expandRecvForm()" data-i18n-title="recv_settings" title="Edit connection / folder"><span class="btn-ico" id="ico-expand"></span><span data-i18n="recv_settings">Settings</span></button>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="status" id="status-receiver" data-i18n="recv_status_default">Enter the code and connect</div>
+
+      <!-- Receive file table -->
+      <div class="file-section" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div class="file-table-header" id="recv-table-header" style="display:none">
+          <span></span>
+          <span data-i18n="th_name">Name</span>
+          <span style="text-align:right" data-i18n="th_size">Size</span>
+          <span data-i18n="th_status">Status</span>
+          <span data-i18n="th_hash">Hash</span>
+          <span></span>
+        </div>
+
+        <!-- Server mode: file selection list -->
+        <div class="recv-filelist-panel" id="recv-filelist" style="display:none;">
+          <div class="rfl-header">
+            <span class="rfl-title" data-i18n="rfl_title">Available files</span>
+            <div class="rfl-actions">
+              <button class="tb-btn" onclick="rflSelectAll(true)" data-i18n="rfl_select_all">Select all</button>
+              <button class="tb-btn" onclick="rflSelectAll(false)" data-i18n="rfl_deselect_all">Deselect all</button>
+            </div>
+          </div>
+          <div class="rfl-list" id="rfl-list"></div>
+          <div class="rfl-footer">
+            <span class="rfl-sel-count" id="rfl-sel-count"><span>0</span> <span id="rfl-sel-suffix"></span></span>
+            <button class="tb-btn primary large" id="btn-rfl-download" onclick="rflStartDownload()" disabled><span class="btn-ico" id="ico-rfl-download"></span><span data-i18n="rfl_download_btn">Download selected</span></button>
+          </div>
+        </div>
+
+        <div id="recv-queue" class="file-queue" style="display:none"></div>
+
+        <div id="recv-dropzone">
+          <span class="recv-dz-icon" id="ico-recv-dz"></span>
+          <span class="recv-dz-text" data-i18n="recv_dz_text">Waiting for files…</span>
+          <span class="recv-dz-sub" data-i18n="recv_dz_sub">Connect to a server to start receiving</span>
+        </div>
+      </div>
+
+      <!-- Done banner -->
+      <div id="recv-done-msg" style="display:none" class="done-banner">
+        <span class="btn-ico" id="ico-done"></span>
+        <span data-i18n="recv_done_all">All files received</span>
+        <span class="done-detail" id="recv-done-detail"></span>
+      </div>
+
+<!-- Global progress -->
+      <div class="progress-wrap" id="recv-progress" style="display:none">
+        <div class="progress-label">
+          <span id="recv-file-label" data-i18n="recv_file_label">Receiving</span>
+          <span style="display:flex;gap:0.3rem;align-items:center;flex-shrink:0">
+            <span id="recv-speed"></span>
+            <span class="pct" id="recv-pct">0%</span>
+          </span>
+        </div>
+        <div class="progress-track"><div class="progress-bar" id="recv-bar"></div></div>
+      </div>
+
+    </div><!-- /screen-receiver -->
+
+    <!-- ── SCREEN SERVER ── -->
+    <div class="screen" id="screen-server">
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <div class="session-block">
+            <span class="sess-label" style="color:var(--cyan)" data-i18n="srv_sess_label">Server</span>
+            <div class="code-pill" id="srv-code"
+              role="button" tabindex="0"
+              style="color:var(--cyan);background:rgba(63,240,224,.08);border-color:rgba(63,240,224,.25);"
+              onclick="copyCodeSrv()"
+              onkeydown="if(event.key==='Enter'||event.key===' ')copyCodeSrv()">
+              · · · · · ·
+            </div>
+          </div>
+          <span class="queue-count hidden" id="srv-queue-count">0 files</span>
+        </div>
+        <div class="toolbar-right">
+          <label class="tb-toggle" data-i18n-title="sha_toggle_title" title="Compute &amp; send SHA-256 hash to receivers for integrity check">
+            <input type="checkbox" id="sha-toggle-srv" onchange="onSrvShaToggle(this)">
+            <span class="tb-toggle-track"></span>
+            <span class="tb-toggle-label" data-i18n="sha_label">SHA-256</span>
+          </label>
+          <span class="srv-clients-badge" id="srv-clients-badge">0 connected</span>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="status pulse" id="status-server">Initializing server…</div>
+
+      <!-- Receivers panel (visible when at least one receiver connects) -->
+      <div id="srv-receivers-panel">
+        <div class="srv-recv-header">
+          <span class="srv-recv-title"><span class="btn-ico" id="ico-srv-recv-title"></span><span data-i18n="srv_recv_title">Receivers</span></span>
+          <span style="font-size:0.56rem;color:var(--dim);letter-spacing: .04em;text-transform: none" data-i18n="srv_recv_sub">
+            Download progress and ACK verification
+          </span>
+        </div>
+        <div class="srv-recv-list" id="srv-recv-list"></div>
+      </div>
+
+      <!-- File section -->
+      <div class="file-section">
+        <div class="file-table-header">
+          <span></span>
+          <span data-i18n="th_name">Name</span>
+          <span style="text-align:right" data-i18n="th_size">Size</span>
+          <span data-i18n="th_status">Status</span>
+          <span data-i18n="th_hash">Hash</span>
+          <span></span>
+        </div>
+
+        <div id="srv-queue" class="file-queue"></div>
+
+        <div class="dropzone" id="srv-dropzone">
+          <input type="file" id="srv-file-input" multiple onchange="onSrvFilesSelected(this.files)" />
+          <span class="dz-icon" id="ico-srv-dz"></span>
+          <span class="dz-text" data-i18n="srv_dz_text">Drop files here or click to browse</span>
+        </div>
+      </div>
+
+    </div><!-- /screen-server -->
+
+  </div><!-- /main -->
+
+  <!-- ═══ STATUS BAR ═══ -->
+  <div id="statusbar">
+    <span class="sb-item">PeerDrop</span>
+    <span class="sb-sep">|</span>
+    <span class="sb-item" id="sb-tag">WebRTC · No relay · No limits</span>
+    <span class="sb-sep">|</span>
+    <span class="sb-item sb-green" id="sb-mode">Idle</span>
+  </div>
+
+</div><!-- /app -->
+
+<!-- Global role tooltip — fixed positioned, above all overflow contexts -->
+<div id="role-tooltip"></div>
+
+<script>
+  /* ════════════════════════════════════════════════════════
+     ROLE TOOLTIPS — body-level, immune to overflow:hidden
+  ════════════════════════════════════════════════════════ */
+  function _tooltipItems(key){
+    if(key==='receiver'){
+      return {title:t('tt_receiver_title'),lines:[t('tt_receiver_1'),t('tt_receiver_2'),t('tt_receiver_3'),t('tt_receiver_4')]};
+    }
+    if(key==='server'){
+      return {title:t('tt_server_title'),lines:[t('tt_server_1'),t('tt_server_2'),t('tt_server_3'),t('tt_server_4')]};
+    }
+    return null;
+  }
+
+  var _tt=document.getElementById('role-tooltip');
+  var _ttTarget=null;
+
+  function _ttShow(btn){
+    var key=btn.getAttribute('data-tooltip');
+    var content=_tooltipItems(key);
+    if(!content)return;
+    var html='<div class="role-tooltip-title">'+escHtml(content.title)+'</div>';
+    content.lines.forEach(function(line){
+      html+='<div class="role-tooltip-line"><span class="tt-dot">'+icoSvg('chevronRight',10)+'</span>'+escHtml(line)+'</div>';
+    });
+    _tt.innerHTML=html;
+    _tt.classList.add('visible');
+    _ttPosition(btn);
+  }
+
+  function _ttPosition(btn){
+    var r=btn.getBoundingClientRect();
+    var tw=_tt.offsetWidth;
+    var th=_tt.offsetHeight;
+    var left=r.left+r.width/2-tw/2;
+    var top=r.top-th-10; // 10px above the button
+    // clamp horizontally within viewport
+    left=Math.max(8,Math.min(left,window.innerWidth-tw-8));
+    // if above viewport, flip below
+    if(top<8){top=r.bottom+10;}
+    _tt.style.left=left+'px';
+    _tt.style.top=top+'px';
+    // arrow direction
+    _tt.classList.toggle('flipped', top > r.top);
+  }
+
+  function _ttHide(){_tt.classList.remove('visible');}
+
+  document.querySelectorAll('.role-btn[data-tooltip]').forEach(function(btn){
+    btn.addEventListener('mouseenter',function(){_ttTarget=btn;_ttShow(btn);});
+    btn.addEventListener('mouseleave',function(){_ttTarget=null;_ttHide();});
+    btn.addEventListener('focus',function(){_ttTarget=btn;_ttShow(btn);});
+    btn.addEventListener('blur',function(){_ttTarget=null;_ttHide();});
+    // Touch: tap toggles tooltip; tap outside dismisses
+    btn.addEventListener('touchstart',function(e){
+      if(_ttTarget===btn){_ttTarget=null;_ttHide();}
+      else{e.preventDefault();_ttTarget=btn;_ttShow(btn);}
+    },{passive:false});
+  });
+  document.addEventListener('touchstart',function(e){
+    if(_ttTarget&&!_ttTarget.contains(e.target)){_ttTarget=null;_ttHide();}
+  },{passive:true});
+  window.addEventListener('scroll',function(){if(_ttTarget)_ttPosition(_ttTarget);},true);
+
+  /* ════════════════════════════════════════════════════════
+     ICÔNES VECTORIELLES (style outline, currentColor)
+  ════════════════════════════════════════════════════════ */
+  var ICONS={
+    download:'<path d="M10 3v9M6.5 9l3.5 3.5L13.5 9"/><path d="M4 14.5v1.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1.5"/>',
+    upload:'<path d="M10 13V4M6.5 7.5L10 4l3.5 3.5"/><path d="M4 14.5v1.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1.5"/>',
+    server:'<rect x="3" y="4" width="14" height="5" rx="1.2"/><rect x="3" y="11" width="14" height="5" rx="1.2"/><circle cx="6" cy="6.5" r="0.6" fill="currentColor" stroke="none"/><circle cx="6" cy="13.5" r="0.6" fill="currentColor" stroke="none"/>',
+    bulb:'<path d="M10 2.5a5 5 0 0 0-3 9c.6.5 1 1.2 1 2v.5h4v-.5c0-.8.4-1.5 1-2a5 5 0 0 0-3-9Z"/><path d="M8.3 16.5h3.4M8.7 18h2.6"/>',
+    folder:'<path d="M3 5.5A1.5 1.5 0 0 1 4.5 4H8l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4.5A1.5 1.5 0 0 1 3 14.5v-9Z"/>',
+    x:'<path d="M5 5l10 10M15 5L5 15"/>',
+    arrowRight:'<path d="M4 10h11.5M11 5.5 15.5 10 11 14.5"/>',
+    chevronRight:'<path d="M7.5 5l5 5-5 5"/>',
+    settings:'<circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4M15.1 15.1l-1.4-1.4M6.3 6.3 4.9 4.9"/>',
+    trash:'<path d="M4 6h12M8 6V4.5A1 1 0 0 1 9 3.5h2A1 1 0 0 1 12 4.5V6M6 6l.6 9.5A1.2 1.2 0 0 0 7.8 16.6h4.4a1.2 1.2 0 0 0 1.2-1.1L14 6"/>',
+    check:'<path d="M4.5 10.5l3.5 3.5 7-8"/>',
+    checkDouble:'<path d="M1.5 10.5l3 3 6-7"/><path d="M7.5 11.3l1 1.2 7-8"/>',
+    alertTriangle:'<path d="M10 3.5 17.5 16h-15L10 3.5Z"/><path d="M10 8v3.2"/><circle cx="10" cy="13.7" r="0.75" fill="currentColor" stroke="none"/>',
+    clock:'<circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/>',
+    file:'<path d="M6 3h5.5L15 6.5V16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M11.3 3v3.3H14.6"/>',
+    users:'<circle cx="7" cy="7" r="2.4"/><path d="M2.5 16v-1a3.5 3.5 0 0 1 3.5-3.5h2a3.5 3.5 0 0 1 3.5 3.5v1"/><circle cx="14.5" cy="7.5" r="2"/><path d="M13 12h1a3 3 0 0 1 3 3v1"/>',
+    cat:'<path d="M5 4 6.5 8h7L15 4l-1.5 4.6a5 5 0 0 1-7 0Z"/><circle cx="7.8" cy="10.5" r="0.5" fill="currentColor" stroke="none"/><circle cx="12.2" cy="10.5" r="0.5" fill="currentColor" stroke="none"/><path d="M9 11.6c.3.4.7.4 1 0M4 9.5l2.6 1M16 9.5l-2.6 1M4 12l2.6-.3M16 12l-2.6-.3"/>'
+  };
+  function icoSvg(name,size){
+    var s=size||16;
+    var body=ICONS[name]||'';
+    return '<svg viewBox="0 0 20 20" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+body+'</svg>';
+  }
+
+  /* ════════════════════════════════════════════════════════
+     LOCALISATION — FR / EN / IT / PT / ES / RU
+  ════════════════════════════════════════════════════════ */
+  var I18N={
+  en:{
+    role_title:'Choose a mode', role_sub:'Direct WebRTC · No server · No upload limit',
+    role_receive_label:'Receive', role_receive_desc:'Download from a server',
+    role_server_label:'Server', role_server_desc:'Host a file library for multiple peers',
+    role_hint:'Hover or tap a mode for details · Click to get started', role_hint_loading:'Loading…',
+    edge_note:'Microsoft Edge recommended — Edge supports the File System Access API, allowing received files to be saved directly to a chosen folder without individual download dialogs. Other browsers fall back to standard per-file downloads.',
+    tt_receiver_title:'Receive mode',
+    tt_receiver_1:'Enter the 6-character code given by the server to connect',
+    tt_receiver_2:'Select an output folder — files save directly to disk, no per-file dialogs',
+    tt_receiver_3:'Transfer resumes automatically if the connection drops mid-file',
+    tt_receiver_4:'Works with any server-mode peer',
+    tt_server_title:'Server mode',
+    tt_server_1:'Host files that multiple receivers can browse and download at once',
+    tt_server_2:'Each receiver picks which files to download — transfers run in parallel',
+    tt_server_3:'Live ACK tracking confirms each file was fully received per client',
+    tt_server_4:'Add or remove files any time — connected receivers are notified instantly',
+    recv_code_label:'Server code', recv_connect_btn:'Connect', recv_folder_label:'Download folder',
+    recv_dir_choose:'Choose', recv_dir_auto:'Auto-download (no folder selected)', recv_clear_btn:'Clear received',
+    recv_status_default:'Enter the code and connect', recv_connected_to:'Connected to', recv_settings:'Settings',
+    th_name:'Name', th_size:'Size', th_status:'Status', th_hash:'Hash',
+    rfl_title:'Available files', rfl_select_all:'Select all', rfl_deselect_all:'Deselect all', rfl_download_btn:'Download selected',
+    recv_dz_text:'Waiting for files…', recv_dz_sub:'Connect to a server to start receiving',
+    recv_done_all:'All files received', recv_file_label:'Receiving',
+    srv_sess_label:'Server', sha_label:'SHA-256', sha_toggle_title:'Compute & send SHA-256 hash to receivers for integrity check', srv_recv_title:'Receivers', srv_recv_sub:'Download progress and ACK verification',
+    srv_dz_text:'Drop files here or click to browse',
+    statusbar_tag:'WebRTC · No relay · No limits', statusbar_idle:'Idle', lang_label:'Language',
+    app_receive_mode:'Receive mode', app_server_mode:'Server mode',
+    msg_init:'Initializing…', msg_conn_timeout:'Connection to relay server timed out. Check your network.',
+    msg_peer_error:'PeerJS error: {err}',
+    msg_network_offline:'Network offline — transfer paused', msg_network_back:'Network back — reconnecting…',
+    msg_ios_no_folder:'iOS does not support folder selection — files will be downloaded individually to your Downloads',
+    msg_folder_not_supported:'Folder selection not supported in this browser — try Edge or Chrome on desktop/Android',
+    msg_folder_access_error:'Could not access folder: {err}',
+    msg_invalid_code:'Invalid code — use letters and digits only (A-Z, 2-9)',
+    msg_connecting_to:'Connecting to {code}…', msg_conn_timeout_recv:'Connection timed out. Check the code and your network.',
+    msg_could_not_connect:'Could not connect: {err}',
+    msg_connected_waiting_files:'Connected — waiting for files…',
+    msg_connected_no_data:'Connected but the server sent nothing — check the server is ready',
+    msg_conn_closed:'Connection closed', msg_reconnecting_attempt:'Reconnecting in {s}s… (attempt {n})',
+    msg_server_unreachable:'Server unreachable — resetting in 5s…', msg_server_disconnected:'Server disconnected — enter a new code to reconnect',
+    msg_large_file:'Large file ({size}) — select a download folder to avoid memory issues',
+    msg_file_empty_received:'{name} (empty)', msg_all_received:'All files received',
+    msg_cannot_write_folder:'Cannot write to folder: {err}', msg_write_error:'Write error: {err}',
+    msg_hash_mismatch:'{name} — hash mismatch, file rejected',
+    msg_file_saved:'{name} saved', msg_conn_error:'Connection error: {err}',
+    msg_server_ready:'Server ready — share the code with receivers',
+    msg_srv_connected:'Receiver #{num} connected — sending file list…',
+    msg_srv_disconnected:'Receiver #{num} disconnected — removing in 10s…',
+    msg_srv_confirmed:'Receiver #{num} confirmed file {ack}/{total}',
+    msg_srv_complete:'Receiver #{num} download complete',
+    msg_srv_read_error:'File read error for receiver #{num}',
+    msg_checking_folder:'Checking local folder…',
+    msg_files_to_download:'{remaining} file(s) to download', msg_skipped_present:' · {skipped} already present',
+    msg_all_present:'All files already present', msg_conn_lost_download:'Connection lost — cannot download',
+    msg_downloading_n:'Downloading {n} file(s)…', msg_error_sending_request:'Error sending request: {err}',
+    msg_file_received:'{name} received',
+    conn_connecting:'Connecting…', conn_connected:'Connected', conn_disconnected:'Disconnected', conn_error:'Error',
+    conn_no_response:'No response — connection may be dead', conn_waiting_receivers:'Waiting for receivers…',
+    conn_n_receivers:'{n} receiver(s) connected',
+    badge_waiting:'Waiting', badge_sending:'Sending', badge_sending_dots:'Sending…', badge_all_ok:'All confirmed',
+    badge_partial:'{ack}/{total} confirmed', badge_ack_timeout:'Timed out', badge_conn_lost:'Connection lost',
+    badge_read_err:'Read error', badge_error:'Error',
+    st_saved:'Saved', st_bad:'Failed',
+    clipboard_copied:'Copied', clipboard_manual:'Copy manually',
+    countdown_remove:'Removing in {s}s', rfl_selected_count:'{n} file(s) selected', srv_connected_count:'{n} connected',
+    ondisk_label:'On disk', dl_label:'Download',
+    sha_no_hash:'no hash', sha_expected_title:'Expected SHA-256: {hash}\n(verifying after reception)',
+    sha_not_provided:'Server did not provide a hash', msg_files_downloaded_successfully:'{n} file(s) downloaded successfully',
+    sha_verifying:'Verifying…', sha_too_large_verify:'File too large for SHA-256 verification',
+    sha_match_prefix:'Hash match: ', sha_mismatch_prefix:'Mismatch! Expected: ', sha_hash_err:'Hash error', sha_ok:'OK', sha_fail:'Failed',
+    srv_waiting_request:'Waiting for request…',
+    badge_ack_timeout_title:'Receiver confirmed {ack}/{total} files — connection may have dropped',
+    badge_ack_timeout_2min_title:'No confirmation after 2 min — receiver may have disconnected', sha_hashing:'Hashing…',
+    st_ready:'Ready', srv_files_count:'{n} file(s)', remove_label:'Remove',
+    ondisk_title:'File already exists in selected folder (same size)', st_done:'Done',
+    recv_dir_clear_title:'Deselect folder'
+  },
+  fr:{
+    role_title:'Choisir un mode', role_sub:'WebRTC direct · Aucun serveur · Aucune limite',
+    role_receive_label:'Recevoir', role_receive_desc:'Télécharger depuis un serveur',
+    role_server_label:'Serveur', role_server_desc:'Héberger une bibliothèque de fichiers pour plusieurs pairs',
+    role_hint:'Survolez ou touchez un mode pour plus de détails · Cliquez pour commencer', role_hint_loading:'Chargement…',
+    edge_note:'Microsoft Edge recommandé — Edge prend en charge la File System Access API, permettant d\'enregistrer les fichiers reçus directement dans un dossier choisi, sans boîte de dialogue individuelle. Les autres navigateurs utilisent un téléchargement fichier par fichier.',
+    tt_receiver_title:'Mode réception',
+    tt_receiver_1:'Entrez le code à 6 caractères donné par le serveur pour vous connecter',
+    tt_receiver_2:'Choisissez un dossier de sortie — les fichiers s\'enregistrent directement sur le disque, sans boîte de dialogue',
+    tt_receiver_3:'Le transfert reprend automatiquement si la connexion se coupe en cours de fichier',
+    tt_receiver_4:'Fonctionne avec tout pair en mode serveur',
+    tt_server_title:'Mode serveur',
+    tt_server_1:'Hébergez des fichiers que plusieurs récepteurs peuvent parcourir et télécharger en même temps',
+    tt_server_2:'Chaque récepteur choisit les fichiers à télécharger — les transferts sont en parallèle',
+    tt_server_3:'Le suivi ACK en direct confirme la réception complète de chaque fichier par client',
+    tt_server_4:'Ajoutez ou retirez des fichiers à tout moment — les récepteurs connectés sont notifiés instantanément',
+    recv_code_label:'Code du serveur', recv_connect_btn:'Se connecter', recv_folder_label:'Dossier de téléchargement',
+    recv_dir_choose:'Choisir', recv_dir_auto:'Téléchargement automatique (aucun dossier choisi)', recv_clear_btn:'Effacer les reçus',
+    recv_status_default:'Entrez le code et connectez-vous', recv_connected_to:'Connecté à', recv_settings:'Réglages',
+    th_name:'Nom', th_size:'Taille', th_status:'Statut', th_hash:'Hash',
+    rfl_title:'Fichiers disponibles', rfl_select_all:'Tout sélectionner', rfl_deselect_all:'Tout désélectionner', rfl_download_btn:'Télécharger la sélection',
+    recv_dz_text:'En attente de fichiers…', recv_dz_sub:'Connectez-vous à un serveur pour commencer',
+    recv_done_all:'Tous les fichiers ont été reçus', recv_file_label:'Réception',
+    srv_sess_label:'Serveur', sha_label:'SHA-256', sha_toggle_title:'Calculer et envoyer un hash SHA-256 aux récepteurs pour vérification d\'intégrité', srv_recv_title:'Récepteurs', srv_recv_sub:'Progression du téléchargement et vérification ACK',
+    srv_dz_text:'Déposez des fichiers ici ou cliquez pour parcourir',
+    statusbar_tag:'WebRTC · Sans relais · Sans limites', statusbar_idle:'Inactif', lang_label:'Langue',
+    app_receive_mode:'Mode réception', app_server_mode:'Mode serveur',
+    msg_init:'Initialisation…', msg_conn_timeout:'Délai de connexion au serveur relais dépassé. Vérifiez votre réseau.',
+    msg_peer_error:'Erreur PeerJS : {err}',
+    msg_network_offline:'Réseau hors ligne — transfert en pause', msg_network_back:'Réseau rétabli — reconnexion…',
+    msg_ios_no_folder:'iOS ne prend pas en charge la sélection de dossier — les fichiers seront téléchargés individuellement',
+    msg_folder_not_supported:'Sélection de dossier non prise en charge par ce navigateur — essayez Edge ou Chrome sur ordinateur/Android',
+    msg_folder_access_error:'Impossible d\'accéder au dossier : {err}',
+    msg_invalid_code:'Code invalide — uniquement lettres et chiffres (A-Z, 2-9)',
+    msg_connecting_to:'Connexion à {code}…', msg_conn_timeout_recv:'Délai de connexion dépassé. Vérifiez le code et votre réseau.',
+    msg_could_not_connect:'Connexion impossible : {err}',
+    msg_connected_waiting_files:'Connecté — en attente de fichiers…',
+    msg_connected_no_data:'Connecté mais le serveur n\'a rien envoyé — vérifiez qu\'il est prêt',
+    msg_conn_closed:'Connexion fermée', msg_reconnecting_attempt:'Reconnexion dans {s}s… (tentative {n})',
+    msg_server_unreachable:'Serveur injoignable — réinitialisation dans 5s…', msg_server_disconnected:'Serveur déconnecté — entrez un nouveau code pour vous reconnecter',
+    msg_large_file:'Fichier volumineux ({size}) — choisissez un dossier de téléchargement pour éviter les problèmes de mémoire',
+    msg_file_empty_received:'{name} (vide)', msg_all_received:'Tous les fichiers ont été reçus',
+    msg_cannot_write_folder:'Écriture impossible dans le dossier : {err}', msg_write_error:'Erreur d\'écriture : {err}',
+    msg_hash_mismatch:'{name} — hash invalide, fichier rejeté',
+    msg_file_saved:'{name} enregistré', msg_conn_error:'Erreur de connexion : {err}',
+    msg_server_ready:'Serveur prêt — partagez le code avec les récepteurs',
+    msg_srv_connected:'Récepteur #{num} connecté — envoi de la liste des fichiers…',
+    msg_srv_disconnected:'Récepteur #{num} déconnecté — suppression dans 10s…',
+    msg_srv_confirmed:'Récepteur #{num} a confirmé le fichier {ack}/{total}',
+    msg_srv_complete:'Téléchargement du récepteur #{num} terminé',
+    msg_srv_read_error:'Erreur de lecture du fichier pour le récepteur #{num}',
+    msg_checking_folder:'Vérification du dossier local…',
+    msg_files_to_download:'{remaining} fichier(s) à télécharger', msg_skipped_present:' · {skipped} déjà présent(s)',
+    msg_all_present:'Tous les fichiers sont déjà présents', msg_conn_lost_download:'Connexion perdue — téléchargement impossible',
+    msg_downloading_n:'Téléchargement de {n} fichier(s)…', msg_error_sending_request:'Erreur d\'envoi de la demande : {err}',
+    msg_file_received:'{name} reçu',
+    conn_connecting:'Connexion…', conn_connected:'Connecté', conn_disconnected:'Déconnecté', conn_error:'Erreur',
+    conn_no_response:'Aucune réponse — la connexion semble morte', conn_waiting_receivers:'En attente de récepteurs…',
+    conn_n_receivers:'{n} récepteur(s) connecté(s)',
+    badge_waiting:'En attente', badge_sending:'Envoi', badge_sending_dots:'Envoi…', badge_all_ok:'Tout confirmé',
+    badge_partial:'{ack}/{total} confirmés', badge_ack_timeout:'Délai dépassé', badge_conn_lost:'Connexion perdue',
+    badge_read_err:'Erreur de lecture', badge_error:'Erreur',
+    st_saved:'Enregistré', st_bad:'Échec',
+    clipboard_copied:'Copié', clipboard_manual:'Copie manuelle',
+    countdown_remove:'Suppression dans {s}s', rfl_selected_count:'{n} fichier(s) sélectionné(s)', srv_connected_count:'{n} connecté(s)',
+    ondisk_label:'Sur le disque', dl_label:'Télécharger',
+    sha_no_hash:'aucun hash', sha_expected_title:'SHA-256 attendu : {hash}\n(vérification après réception)',
+    sha_not_provided:'Le serveur n\'a pas fourni de hash', msg_files_downloaded_successfully:'{n} fichier(s) téléchargé(s) avec succès',
+    sha_verifying:'Vérification…', sha_too_large_verify:'Fichier trop volumineux pour la vérification SHA-256',
+    sha_match_prefix:'Hash correspondant : ', sha_mismatch_prefix:'Non concordant ! Attendu : ', sha_hash_err:'Erreur de hash', sha_ok:'OK', sha_fail:'Échec',
+    srv_waiting_request:'En attente de demande…',
+    badge_ack_timeout_title:'Le récepteur a confirmé {ack}/{total} fichiers — la connexion a peut-être été coupée',
+    badge_ack_timeout_2min_title:'Aucune confirmation après 2 min — le récepteur s\'est peut-être déconnecté', sha_hashing:'Calcul du hash…',
+    st_ready:'Prêt', srv_files_count:'{n} fichier(s)', remove_label:'Retirer',
+    ondisk_title:'Le fichier existe déjà dans le dossier choisi (même taille)', st_done:'Terminé',
+    recv_dir_clear_title:'Désélectionner le dossier'
+  },
+  it:{
+    role_title:'Scegli una modalità', role_sub:'WebRTC diretto · Nessun server · Nessun limite',
+    role_receive_label:'Ricevi', role_receive_desc:'Scarica da un server',
+    role_server_label:'Server', role_server_desc:'Ospita una libreria di file per più peer',
+    role_hint:'Passa il mouse o tocca una modalità per i dettagli · Clicca per iniziare', role_hint_loading:'Caricamento…',
+    edge_note:'Microsoft Edge consigliato — Edge supporta la File System Access API, che consente di salvare i file ricevuti direttamente in una cartella scelta senza finestre di dialogo singole. Gli altri browser useranno il download file per file.',
+    tt_receiver_title:'Modalità ricezione',
+    tt_receiver_1:'Inserisci il codice a 6 caratteri fornito dal server per connetterti',
+    tt_receiver_2:'Seleziona una cartella di destinazione — i file si salvano direttamente sul disco, senza finestre per ogni file',
+    tt_receiver_3:'Il trasferimento riprende automaticamente se la connessione cade a metà file',
+    tt_receiver_4:'Funziona con qualsiasi peer in modalità server',
+    tt_server_title:'Modalità server',
+    tt_server_1:'Ospita file che più destinatari possono sfogliare e scaricare contemporaneamente',
+    tt_server_2:'Ogni destinatario sceglie quali file scaricare — i trasferimenti avvengono in parallelo',
+    tt_server_3:'Il tracciamento ACK in tempo reale conferma la ricezione completa di ogni file per cliente',
+    tt_server_4:'Aggiungi o rimuovi file in qualsiasi momento — i destinatari connessi vengono avvisati subito',
+    recv_code_label:'Codice del server', recv_connect_btn:'Connetti', recv_folder_label:'Cartella di download',
+    recv_dir_choose:'Scegli', recv_dir_auto:'Download automatico (nessuna cartella scelta)', recv_clear_btn:'Cancella ricevuti',
+    recv_status_default:'Inserisci il codice e connettiti', recv_connected_to:'Connesso a', recv_settings:'Impostazioni',
+    th_name:'Nome', th_size:'Dimensione', th_status:'Stato', th_hash:'Hash',
+    rfl_title:'File disponibili', rfl_select_all:'Seleziona tutto', rfl_deselect_all:'Deseleziona tutto', rfl_download_btn:'Scarica selezionati',
+    recv_dz_text:'In attesa di file…', recv_dz_sub:'Connettiti a un server per iniziare a ricevere',
+    recv_done_all:'Tutti i file sono stati ricevuti', recv_file_label:'Ricezione',
+    srv_sess_label:'Server', sha_label:'SHA-256', sha_toggle_title:'Calcola e invia un hash SHA-256 ai destinatari per la verifica dell\'integrità', srv_recv_title:'Destinatari', srv_recv_sub:'Avanzamento download e verifica ACK',
+    srv_dz_text:'Trascina i file qui o clicca per sfogliare',
+    statusbar_tag:'WebRTC · Nessun relay · Nessun limite', statusbar_idle:'Inattivo', lang_label:'Lingua',
+    app_receive_mode:'Modalità ricezione', app_server_mode:'Modalità server',
+    msg_init:'Inizializzazione…', msg_conn_timeout:'Timeout di connessione al server relay. Controlla la rete.',
+    msg_peer_error:'Errore PeerJS: {err}',
+    msg_network_offline:'Rete offline — trasferimento in pausa', msg_network_back:'Rete ripristinata — riconnessione…',
+    msg_ios_no_folder:'iOS non supporta la selezione di cartelle — i file verranno scaricati singolarmente',
+    msg_folder_not_supported:'Selezione cartella non supportata da questo browser — prova Edge o Chrome su desktop/Android',
+    msg_folder_access_error:'Impossibile accedere alla cartella: {err}',
+    msg_invalid_code:'Codice non valido — solo lettere e cifre (A-Z, 2-9)',
+    msg_connecting_to:'Connessione a {code}…', msg_conn_timeout_recv:'Timeout di connessione. Controlla il codice e la rete.',
+    msg_could_not_connect:'Connessione fallita: {err}',
+    msg_connected_waiting_files:'Connesso — in attesa di file…',
+    msg_connected_no_data:'Connesso ma il server non ha inviato nulla — verifica che sia pronto',
+    msg_conn_closed:'Connessione chiusa', msg_reconnecting_attempt:'Riconnessione tra {s}s… (tentativo {n})',
+    msg_server_unreachable:'Server irraggiungibile — reset tra 5s…', msg_server_disconnected:'Server disconnesso — inserisci un nuovo codice per riconnetterti',
+    msg_large_file:'File di grandi dimensioni ({size}) — scegli una cartella di download per evitare problemi di memoria',
+    msg_file_empty_received:'{name} (vuoto)', msg_all_received:'Tutti i file sono stati ricevuti',
+    msg_cannot_write_folder:'Impossibile scrivere nella cartella: {err}', msg_write_error:'Errore di scrittura: {err}',
+    msg_hash_mismatch:'{name} — hash non corrispondente, file rifiutato',
+    msg_file_saved:'{name} salvato', msg_conn_error:'Errore di connessione: {err}',
+    msg_server_ready:'Server pronto — condividi il codice con i destinatari',
+    msg_srv_connected:'Destinatario #{num} connesso — invio elenco file…',
+    msg_srv_disconnected:'Destinatario #{num} disconnesso — rimozione tra 10s…',
+    msg_srv_confirmed:'Destinatario #{num} ha confermato il file {ack}/{total}',
+    msg_srv_complete:'Download del destinatario #{num} completato',
+    msg_srv_read_error:'Errore di lettura file per il destinatario #{num}',
+    msg_checking_folder:'Controllo della cartella locale…',
+    msg_files_to_download:'{remaining} file da scaricare', msg_skipped_present:' · {skipped} già presenti',
+    msg_all_present:'Tutti i file sono già presenti', msg_conn_lost_download:'Connessione persa — download impossibile',
+    msg_downloading_n:'Download di {n} file…', msg_error_sending_request:'Errore nell\'invio della richiesta: {err}',
+    msg_file_received:'{name} ricevuto',
+    conn_connecting:'Connessione…', conn_connected:'Connesso', conn_disconnected:'Disconnesso', conn_error:'Errore',
+    conn_no_response:'Nessuna risposta — la connessione potrebbe essere caduta', conn_waiting_receivers:'In attesa di destinatari…',
+    conn_n_receivers:'{n} destinatari connessi',
+    badge_waiting:'In attesa', badge_sending:'Invio', badge_sending_dots:'Invio…', badge_all_ok:'Tutto confermato',
+    badge_partial:'{ack}/{total} confermati', badge_ack_timeout:'Timeout', badge_conn_lost:'Connessione persa',
+    badge_read_err:'Errore di lettura', badge_error:'Errore',
+    st_saved:'Salvato', st_bad:'Fallito',
+    clipboard_copied:'Copiato', clipboard_manual:'Copia manuale',
+    countdown_remove:'Rimozione tra {s}s', rfl_selected_count:'{n} file selezionati', srv_connected_count:'{n} connessi',
+    ondisk_label:'Sul disco', dl_label:'Scarica',
+    sha_no_hash:'nessun hash', sha_expected_title:'SHA-256 atteso: {hash}\n(verifica dopo la ricezione)',
+    sha_not_provided:'Il server non ha fornito un hash', msg_files_downloaded_successfully:'{n} file scaricati con successo',
+    sha_verifying:'Verifica…', sha_too_large_verify:'File troppo grande per la verifica SHA-256',
+    sha_match_prefix:'Hash corrispondente: ', sha_mismatch_prefix:'Non corrisponde! Atteso: ', sha_hash_err:'Errore hash', sha_ok:'OK', sha_fail:'Fallito',
+    srv_waiting_request:'In attesa di richiesta…',
+    badge_ack_timeout_title:'Il destinatario ha confermato {ack}/{total} file — la connessione potrebbe essersi interrotta',
+    badge_ack_timeout_2min_title:'Nessuna conferma dopo 2 min — il destinatario potrebbe essersi disconnesso', sha_hashing:'Calcolo hash…',
+    st_ready:'Pronto', srv_files_count:'{n} file', remove_label:'Rimuovi',
+    ondisk_title:'Il file esiste già nella cartella scelta (stessa dimensione)', st_done:'Fatto',
+    recv_dir_clear_title:'Deseleziona cartella'
+  },
+  pt:{
+    role_title:'Escolha um modo', role_sub:'WebRTC direto · Sem servidor · Sem limite de envio',
+    role_receive_label:'Receber', role_receive_desc:'Baixar de um servidor',
+    role_server_label:'Servidor', role_server_desc:'Hospedar uma biblioteca de arquivos para vários pares',
+    role_hint:'Passe o mouse ou toque num modo para detalhes · Clique para começar', role_hint_loading:'Carregando…',
+    edge_note:'Microsoft Edge recomendado — o Edge suporta a File System Access API, permitindo salvar os arquivos recebidos diretamente numa pasta escolhida, sem caixas de diálogo individuais. Outros navegadores usarão download arquivo por arquivo.',
+    tt_receiver_title:'Modo recepção',
+    tt_receiver_1:'Digite o código de 6 caracteres fornecido pelo servidor para conectar',
+    tt_receiver_2:'Selecione uma pasta de destino — os arquivos são salvos direto no disco, sem caixas de diálogo por arquivo',
+    tt_receiver_3:'A transferência é retomada automaticamente se a conexão cair no meio de um arquivo',
+    tt_receiver_4:'Funciona com qualquer par em modo servidor',
+    tt_server_title:'Modo servidor',
+    tt_server_1:'Hospede arquivos que vários destinatários podem navegar e baixar ao mesmo tempo',
+    tt_server_2:'Cada destinatário escolhe quais arquivos baixar — as transferências rodam em paralelo',
+    tt_server_3:'O acompanhamento de ACK em tempo real confirma o recebimento completo de cada arquivo por cliente',
+    tt_server_4:'Adicione ou remova arquivos a qualquer momento — os destinatários conectados são notificados na hora',
+    recv_code_label:'Código do servidor', recv_connect_btn:'Conectar', recv_folder_label:'Pasta de download',
+    recv_dir_choose:'Escolher', recv_dir_auto:'Download automático (nenhuma pasta selecionada)', recv_clear_btn:'Limpar recebidos',
+    recv_status_default:'Digite o código e conecte-se', recv_connected_to:'Conectado a', recv_settings:'Ajustes',
+    th_name:'Nome', th_size:'Tamanho', th_status:'Status', th_hash:'Hash',
+    rfl_title:'Arquivos disponíveis', rfl_select_all:'Selecionar tudo', rfl_deselect_all:'Desmarcar tudo', rfl_download_btn:'Baixar selecionados',
+    recv_dz_text:'Aguardando arquivos…', recv_dz_sub:'Conecte-se a um servidor para começar a receber',
+    recv_done_all:'Todos os arquivos foram recebidos', recv_file_label:'Recebendo',
+    srv_sess_label:'Servidor', sha_label:'SHA-256', sha_toggle_title:'Calcular e enviar um hash SHA-256 aos destinatários para verificação de integridade', srv_recv_title:'Destinatários', srv_recv_sub:'Progresso do download e verificação ACK',
+    srv_dz_text:'Solte os arquivos aqui ou clique para procurar',
+    statusbar_tag:'WebRTC · Sem relay · Sem limites', statusbar_idle:'Ocioso', lang_label:'Idioma',
+    app_receive_mode:'Modo recepção', app_server_mode:'Modo servidor',
+    msg_init:'Inicializando…', msg_conn_timeout:'Tempo de conexão ao servidor de relay esgotado. Verifique sua rede.',
+    msg_peer_error:'Erro PeerJS: {err}',
+    msg_network_offline:'Rede offline — transferência pausada', msg_network_back:'Rede restabelecida — reconectando…',
+    msg_ios_no_folder:'O iOS não suporta seleção de pasta — os arquivos serão baixados individualmente',
+    msg_folder_not_supported:'Seleção de pasta não suportada neste navegador — tente Edge ou Chrome no desktop/Android',
+    msg_folder_access_error:'Não foi possível acessar a pasta: {err}',
+    msg_invalid_code:'Código inválido — use apenas letras e números (A-Z, 2-9)',
+    msg_connecting_to:'Conectando a {code}…', msg_conn_timeout_recv:'Tempo de conexão esgotado. Verifique o código e sua rede.',
+    msg_could_not_connect:'Não foi possível conectar: {err}',
+    msg_connected_waiting_files:'Conectado — aguardando arquivos…',
+    msg_connected_no_data:'Conectado, mas o servidor não enviou nada — verifique se ele está pronto',
+    msg_conn_closed:'Conexão encerrada', msg_reconnecting_attempt:'Reconectando em {s}s… (tentativa {n})',
+    msg_server_unreachable:'Servidor inacessível — reiniciando em 5s…', msg_server_disconnected:'Servidor desconectado — digite um novo código para reconectar',
+    msg_large_file:'Arquivo grande ({size}) — escolha uma pasta de download para evitar problemas de memória',
+    msg_file_empty_received:'{name} (vazio)', msg_all_received:'Todos os arquivos foram recebidos',
+    msg_cannot_write_folder:'Não é possível gravar na pasta: {err}', msg_write_error:'Erro de gravação: {err}',
+    msg_hash_mismatch:'{name} — hash não corresponde, arquivo rejeitado',
+    msg_file_saved:'{name} salvo', msg_conn_error:'Erro de conexão: {err}',
+    msg_server_ready:'Servidor pronto — compartilhe o código com os destinatários',
+    msg_srv_connected:'Destinatário #{num} conectado — enviando lista de arquivos…',
+    msg_srv_disconnected:'Destinatário #{num} desconectado — removendo em 10s…',
+    msg_srv_confirmed:'Destinatário #{num} confirmou o arquivo {ack}/{total}',
+    msg_srv_complete:'Download do destinatário #{num} concluído',
+    msg_srv_read_error:'Erro de leitura de arquivo para o destinatário #{num}',
+    msg_checking_folder:'Verificando pasta local…',
+    msg_files_to_download:'{remaining} arquivo(s) para baixar', msg_skipped_present:' · {skipped} já presente(s)',
+    msg_all_present:'Todos os arquivos já estão presentes', msg_conn_lost_download:'Conexão perdida — download impossível',
+    msg_downloading_n:'Baixando {n} arquivo(s)…', msg_error_sending_request:'Erro ao enviar solicitação: {err}',
+    msg_file_received:'{name} recebido',
+    conn_connecting:'Conectando…', conn_connected:'Conectado', conn_disconnected:'Desconectado', conn_error:'Erro',
+    conn_no_response:'Sem resposta — a conexão pode estar morta', conn_waiting_receivers:'Aguardando destinatários…',
+    conn_n_receivers:'{n} destinatário(s) conectado(s)',
+    badge_waiting:'Aguardando', badge_sending:'Enviando', badge_sending_dots:'Enviando…', badge_all_ok:'Tudo confirmado',
+    badge_partial:'{ack}/{total} confirmados', badge_ack_timeout:'Tempo esgotado', badge_conn_lost:'Conexão perdida',
+    badge_read_err:'Erro de leitura', badge_error:'Erro',
+    st_saved:'Salvo', st_bad:'Falhou',
+    clipboard_copied:'Copiado', clipboard_manual:'Copiar manualmente',
+    countdown_remove:'Removendo em {s}s', rfl_selected_count:'{n} arquivo(s) selecionado(s)', srv_connected_count:'{n} conectado(s)',
+    ondisk_label:'No disco', dl_label:'Baixar',
+    sha_no_hash:'sem hash', sha_expected_title:'SHA-256 esperado: {hash}\n(verificando após o recebimento)',
+    sha_not_provided:'O servidor não forneceu um hash', msg_files_downloaded_successfully:'{n} arquivo(s) baixado(s) com sucesso',
+    sha_verifying:'Verificando…', sha_too_large_verify:'Arquivo grande demais para verificação SHA-256',
+    sha_match_prefix:'Hash correspondente: ', sha_mismatch_prefix:'Não corresponde! Esperado: ', sha_hash_err:'Erro de hash', sha_ok:'OK', sha_fail:'Falhou',
+    srv_waiting_request:'Aguardando solicitação…',
+    badge_ack_timeout_title:'O destinatário confirmou {ack}/{total} arquivos — a conexão pode ter caído',
+    badge_ack_timeout_2min_title:'Sem confirmação após 2 min — o destinatário pode ter se desconectado', sha_hashing:'Calculando hash…',
+    st_ready:'Pronto', srv_files_count:'{n} arquivo(s)', remove_label:'Remover',
+    ondisk_title:'O arquivo já existe na pasta escolhida (mesmo tamanho)', st_done:'Concluído',
+    recv_dir_clear_title:'Desmarcar pasta'
+  },
+  es:{
+    role_title:'Elige un modo', role_sub:'WebRTC directo · Sin servidor · Sin límite de envío',
+    role_receive_label:'Recibir', role_receive_desc:'Descargar desde un servidor',
+    role_server_label:'Servidor', role_server_desc:'Alojar una biblioteca de archivos para varios pares',
+    role_hint:'Pasa el cursor o toca un modo para ver detalles · Haz clic para empezar', role_hint_loading:'Cargando…',
+    edge_note:'Se recomienda Microsoft Edge — Edge admite la File System Access API, que permite guardar los archivos recibidos directamente en una carpeta elegida sin cuadros de diálogo individuales. Otros navegadores usarán la descarga archivo por archivo.',
+    tt_receiver_title:'Modo recepción',
+    tt_receiver_1:'Introduce el código de 6 caracteres proporcionado por el servidor para conectarte',
+    tt_receiver_2:'Selecciona una carpeta de destino — los archivos se guardan directo en el disco, sin cuadros de diálogo por archivo',
+    tt_receiver_3:'La transferencia se reanuda automáticamente si la conexión se corta a mitad de un archivo',
+    tt_receiver_4:'Funciona con cualquier par en modo servidor',
+    tt_server_title:'Modo servidor',
+    tt_server_1:'Aloja archivos que varios receptores pueden explorar y descargar al mismo tiempo',
+    tt_server_2:'Cada receptor elige qué archivos descargar — las transferencias se ejecutan en paralelo',
+    tt_server_3:'El seguimiento ACK en vivo confirma la recepción completa de cada archivo por cliente',
+    tt_server_4:'Añade o quita archivos en cualquier momento — los receptores conectados son notificados al instante',
+    recv_code_label:'Código del servidor', recv_connect_btn:'Conectar', recv_folder_label:'Carpeta de descarga',
+    recv_dir_choose:'Elegir', recv_dir_auto:'Descarga automática (ninguna carpeta seleccionada)', recv_clear_btn:'Borrar recibidos',
+    recv_status_default:'Introduce el código y conéctate', recv_connected_to:'Conectado a', recv_settings:'Ajustes',
+    th_name:'Nombre', th_size:'Tamaño', th_status:'Estado', th_hash:'Hash',
+    rfl_title:'Archivos disponibles', rfl_select_all:'Seleccionar todo', rfl_deselect_all:'Deseleccionar todo', rfl_download_btn:'Descargar selección',
+    recv_dz_text:'Esperando archivos…', recv_dz_sub:'Conéctate a un servidor para empezar a recibir',
+    recv_done_all:'Todos los archivos han sido recibidos', recv_file_label:'Recibiendo',
+    srv_sess_label:'Servidor', sha_label:'SHA-256', sha_toggle_title:'Calcular y enviar un hash SHA-256 a los receptores para verificación de integridad', srv_recv_title:'Receptores', srv_recv_sub:'Progreso de descarga y verificación ACK',
+    srv_dz_text:'Suelta los archivos aquí o haz clic para explorar',
+    statusbar_tag:'WebRTC · Sin relay · Sin límites', statusbar_idle:'Inactivo', lang_label:'Idioma',
+    app_receive_mode:'Modo recepción', app_server_mode:'Modo servidor',
+    msg_init:'Inicializando…', msg_conn_timeout:'Tiempo de conexión al servidor de relay agotado. Revisa tu red.',
+    msg_peer_error:'Error de PeerJS: {err}',
+    msg_network_offline:'Red sin conexión — transferencia en pausa', msg_network_back:'Red restablecida — reconectando…',
+    msg_ios_no_folder:'iOS no admite la selección de carpetas — los archivos se descargarán individualmente',
+    msg_folder_not_supported:'Selección de carpeta no compatible con este navegador — prueba Edge o Chrome en escritorio/Android',
+    msg_folder_access_error:'No se pudo acceder a la carpeta: {err}',
+    msg_invalid_code:'Código no válido — solo letras y números (A-Z, 2-9)',
+    msg_connecting_to:'Conectando a {code}…', msg_conn_timeout_recv:'Tiempo de conexión agotado. Revisa el código y tu red.',
+    msg_could_not_connect:'No se pudo conectar: {err}',
+    msg_connected_waiting_files:'Conectado — esperando archivos…',
+    msg_connected_no_data:'Conectado, pero el servidor no envió nada — verifica que esté listo',
+    msg_conn_closed:'Conexión cerrada', msg_reconnecting_attempt:'Reconectando en {s}s… (intento {n})',
+    msg_server_unreachable:'Servidor inaccesible — reiniciando en 5s…', msg_server_disconnected:'Servidor desconectado — introduce un nuevo código para reconectar',
+    msg_large_file:'Archivo grande ({size}) — elige una carpeta de descarga para evitar problemas de memoria',
+    msg_file_empty_received:'{name} (vacío)', msg_all_received:'Todos los archivos han sido recibidos',
+    msg_cannot_write_folder:'No se puede escribir en la carpeta: {err}', msg_write_error:'Error de escritura: {err}',
+    msg_hash_mismatch:'{name} — el hash no coincide, archivo rechazado',
+    msg_file_saved:'{name} guardado', msg_conn_error:'Error de conexión: {err}',
+    msg_server_ready:'Servidor listo — comparte el código con los receptores',
+    msg_srv_connected:'Receptor #{num} conectado — enviando lista de archivos…',
+    msg_srv_disconnected:'Receptor #{num} desconectado — se eliminará en 10s…',
+    msg_srv_confirmed:'El receptor #{num} confirmó el archivo {ack}/{total}',
+    msg_srv_complete:'Descarga del receptor #{num} completada',
+    msg_srv_read_error:'Error de lectura de archivo para el receptor #{num}',
+    msg_checking_folder:'Comprobando carpeta local…',
+    msg_files_to_download:'{remaining} archivo(s) por descargar', msg_skipped_present:' · {skipped} ya presente(s)',
+    msg_all_present:'Todos los archivos ya están presentes', msg_conn_lost_download:'Conexión perdida — no se puede descargar',
+    msg_downloading_n:'Descargando {n} archivo(s)…', msg_error_sending_request:'Error al enviar la solicitud: {err}',
+    msg_file_received:'{name} recibido',
+    conn_connecting:'Conectando…', conn_connected:'Conectado', conn_disconnected:'Desconectado', conn_error:'Error',
+    conn_no_response:'Sin respuesta — la conexión podría estar caída', conn_waiting_receivers:'Esperando receptores…',
+    conn_n_receivers:'{n} receptor(es) conectado(s)',
+    badge_waiting:'En espera', badge_sending:'Enviando', badge_sending_dots:'Enviando…', badge_all_ok:'Todo confirmado',
+    badge_partial:'{ack}/{total} confirmados', badge_ack_timeout:'Tiempo agotado', badge_conn_lost:'Conexión perdida',
+    badge_read_err:'Error de lectura', badge_error:'Error',
+    st_saved:'Guardado', st_bad:'Fallido',
+    clipboard_copied:'Copiado', clipboard_manual:'Copiar manualmente',
+    countdown_remove:'Eliminando en {s}s', rfl_selected_count:'{n} archivo(s) seleccionado(s)', srv_connected_count:'{n} conectado(s)',
+    ondisk_label:'En el disco', dl_label:'Descargar',
+    sha_no_hash:'sin hash', sha_expected_title:'SHA-256 esperado: {hash}\n(verificando tras la recepción)',
+    sha_not_provided:'El servidor no proporcionó un hash', msg_files_downloaded_successfully:'{n} archivo(s) descargado(s) con éxito',
+    sha_verifying:'Verificando…', sha_too_large_verify:'Archivo demasiado grande para verificar SHA-256',
+    sha_match_prefix:'Hash coincide: ', sha_mismatch_prefix:'¡No coincide! Esperado: ', sha_hash_err:'Error de hash', sha_ok:'OK', sha_fail:'Fallido',
+    srv_waiting_request:'Esperando solicitud…',
+    badge_ack_timeout_title:'El receptor confirmó {ack}/{total} archivos — la conexión pudo haberse caído',
+    badge_ack_timeout_2min_title:'Sin confirmación después de 2 min — el receptor pudo haberse desconectado', sha_hashing:'Calculando hash…',
+    st_ready:'Listo', srv_files_count:'{n} archivo(s)', remove_label:'Quitar',
+    ondisk_title:'El archivo ya existe en la carpeta elegida (mismo tamaño)', st_done:'Listo',
+    recv_dir_clear_title:'Deseleccionar carpeta'
+  },
+  ru:{
+    role_title:'Выберите режим', role_sub:'Прямой WebRTC · Без сервера · Без ограничений',
+    role_receive_label:'Приём', role_receive_desc:'Скачать с сервера',
+    role_server_label:'Сервер', role_server_desc:'Разместить библиотеку файлов для нескольких получателей',
+    role_hint:'Наведите или коснитесь режима для подробностей · Нажмите, чтобы начать', role_hint_loading:'Загрузка…',
+    edge_note:'Рекомендуется Microsoft Edge — Edge поддерживает File System Access API, что позволяет сохранять полученные файлы прямо в выбранную папку без отдельных диалогов. Другие браузеры будут скачивать файлы по одному.',
+    tt_receiver_title:'Режим приёма',
+    tt_receiver_1:'Введите 6-значный код, полученный от сервера, чтобы подключиться',
+    tt_receiver_2:'Выберите папку назначения — файлы сохраняются прямо на диск, без диалогов для каждого файла',
+    tt_receiver_3:'Передача автоматически возобновляется при обрыве соединения посреди файла',
+    tt_receiver_4:'Работает с любым узлом в режиме сервера',
+    tt_server_title:'Режим сервера',
+    tt_server_1:'Разместите файлы, которые несколько получателей смогут просматривать и скачивать одновременно',
+    tt_server_2:'Каждый получатель сам выбирает файлы для скачивания — передачи идут параллельно',
+    tt_server_3:'Отслеживание ACK в реальном времени подтверждает полное получение каждого файла клиентом',
+    tt_server_4:'Добавляйте или удаляйте файлы в любой момент — подключённые получатели уведомляются мгновенно',
+    recv_code_label:'Код сервера', recv_connect_btn:'Подключиться', recv_folder_label:'Папка загрузки',
+    recv_dir_choose:'Выбрать', recv_dir_auto:'Автозагрузка (папка не выбрана)', recv_clear_btn:'Очистить полученные',
+    recv_status_default:'Введите код и подключитесь', recv_connected_to:'Подключено к', recv_settings:'Настройки',
+    th_name:'Имя', th_size:'Размер', th_status:'Статус', th_hash:'Хеш',
+    rfl_title:'Доступные файлы', rfl_select_all:'Выбрать всё', rfl_deselect_all:'Снять выбор', rfl_download_btn:'Скачать выбранное',
+    recv_dz_text:'Ожидание файлов…', recv_dz_sub:'Подключитесь к серверу, чтобы начать приём',
+    recv_done_all:'Все файлы получены', recv_file_label:'Приём',
+    srv_sess_label:'Сервер', sha_label:'SHA-256', sha_toggle_title:'Вычислить и отправить хеш SHA-256 получателям для проверки целостности', srv_recv_title:'Получатели', srv_recv_sub:'Прогресс загрузки и проверка ACK',
+    srv_dz_text:'Перетащите файлы сюда или нажмите для выбора',
+    statusbar_tag:'WebRTC · Без ретрансляции · Без ограничений', statusbar_idle:'Ожидание', lang_label:'Язык',
+    app_receive_mode:'Режим приёма', app_server_mode:'Режим сервера',
+    msg_init:'Инициализация…', msg_conn_timeout:'Истекло время подключения к серверу связи. Проверьте сеть.',
+    msg_peer_error:'Ошибка PeerJS: {err}',
+    msg_network_offline:'Сеть недоступна — передача приостановлена', msg_network_back:'Сеть восстановлена — переподключение…',
+    msg_ios_no_folder:'iOS не поддерживает выбор папки — файлы будут скачиваться по одному',
+    msg_folder_not_supported:'Выбор папки не поддерживается этим браузером — попробуйте Edge или Chrome на компьютере/Android',
+    msg_folder_access_error:'Не удалось получить доступ к папке: {err}',
+    msg_invalid_code:'Неверный код — только буквы и цифры (A-Z, 2-9)',
+    msg_connecting_to:'Подключение к {code}…', msg_conn_timeout_recv:'Истекло время подключения. Проверьте код и сеть.',
+    msg_could_not_connect:'Не удалось подключиться: {err}',
+    msg_connected_waiting_files:'Подключено — ожидание файлов…',
+    msg_connected_no_data:'Подключено, но сервер ничего не отправил — проверьте его готовность',
+    msg_conn_closed:'Соединение закрыто', msg_reconnecting_attempt:'Переподключение через {s}с… (попытка {n})',
+    msg_server_unreachable:'Сервер недоступен — сброс через 5с…', msg_server_disconnected:'Сервер отключён — введите новый код для повторного подключения',
+    msg_large_file:'Большой файл ({size}) — выберите папку загрузки, чтобы избежать проблем с памятью',
+    msg_file_empty_received:'{name} (пусто)', msg_all_received:'Все файлы получены',
+    msg_cannot_write_folder:'Не удалось записать в папку: {err}', msg_write_error:'Ошибка записи: {err}',
+    msg_hash_mismatch:'{name} — хеш не совпадает, файл отклонён',
+    msg_file_saved:'{name} сохранён', msg_conn_error:'Ошибка соединения: {err}',
+    msg_server_ready:'Сервер готов — поделитесь кодом с получателями',
+    msg_srv_connected:'Получатель №{num} подключён — отправка списка файлов…',
+    msg_srv_disconnected:'Получатель №{num} отключён — удаление через 10с…',
+    msg_srv_confirmed:'Получатель №{num} подтвердил файл {ack}/{total}',
+    msg_srv_complete:'Загрузка получателя №{num} завершена',
+    msg_srv_read_error:'Ошибка чтения файла для получателя №{num}',
+    msg_checking_folder:'Проверка локальной папки…',
+    msg_files_to_download:'Файлов для загрузки: {remaining}', msg_skipped_present:' · уже есть: {skipped}',
+    msg_all_present:'Все файлы уже присутствуют', msg_conn_lost_download:'Соединение потеряно — загрузка невозможна',
+    msg_downloading_n:'Загрузка {n} файла(ов)…', msg_error_sending_request:'Ошибка отправки запроса: {err}',
+    msg_file_received:'{name} получен',
+    conn_connecting:'Подключение…', conn_connected:'Подключено', conn_disconnected:'Отключено', conn_error:'Ошибка',
+    conn_no_response:'Нет ответа — соединение может быть потеряно', conn_waiting_receivers:'Ожидание получателей…',
+    conn_n_receivers:'Подключено получателей: {n}',
+    badge_waiting:'Ожидание', badge_sending:'Отправка', badge_sending_dots:'Отправка…', badge_all_ok:'Всё подтверждено',
+    badge_partial:'{ack}/{total} подтверждено', badge_ack_timeout:'Истекло время', badge_conn_lost:'Соединение потеряно',
+    badge_read_err:'Ошибка чтения', badge_error:'Ошибка',
+    st_saved:'Сохранено', st_bad:'Ошибка',
+    clipboard_copied:'Скопировано', clipboard_manual:'Скопируйте вручную',
+    countdown_remove:'Удаление через {s}с', rfl_selected_count:'Выбрано файлов: {n}', srv_connected_count:'Подключено: {n}',
+    ondisk_label:'На диске', dl_label:'Скачать',
+    sha_no_hash:'нет хеша', sha_expected_title:'Ожидаемый SHA-256: {hash}\n(проверка после получения)',
+    sha_not_provided:'Сервер не предоставил хеш', msg_files_downloaded_successfully:'Успешно загружено файлов: {n}',
+    sha_verifying:'Проверка…', sha_too_large_verify:'Файл слишком большой для проверки SHA-256',
+    sha_match_prefix:'Хеш совпадает: ', sha_mismatch_prefix:'Несовпадение! Ожидалось: ', sha_hash_err:'Ошибка хеша', sha_ok:'OK', sha_fail:'Ошибка',
+    srv_waiting_request:'Ожидание запроса…',
+    badge_ack_timeout_title:'Получатель подтвердил {ack}/{total} файлов — соединение могло прерваться',
+    badge_ack_timeout_2min_title:'Нет подтверждения более 2 минут — получатель мог отключиться', sha_hashing:'Вычисление хеша…',
+    st_ready:'Готово', srv_files_count:'{n} файл(ов)', remove_label:'Удалить',
+    ondisk_title:'Файл уже существует в выбранной папке (тот же размер)', st_done:'Готово',
+    recv_dir_clear_title:'Отменить выбор папки'
+  }
+  };
+  var SUPPORTED_LANGS=['fr','en','it','pt','es','ru'];
+  var LANG=(function(){
+    try{
+      var saved=localStorage.getItem('pd_lang');
+      if(saved&&SUPPORTED_LANGS.indexOf(saved)!==-1)return saved;
+    }catch(_){}
+    var nav=(navigator.language||'en').slice(0,2).toLowerCase();
+    return SUPPORTED_LANGS.indexOf(nav)!==-1?nav:'en';
+  })();
+  function t(key,vars){
+    var dict=I18N[LANG]||I18N.en;
+    var str=dict[key];
+    if(str===undefined)str=(I18N.en[key]!==undefined?I18N.en[key]:key);
+    if(vars){
+      Object.keys(vars).forEach(function(k){
+        str=str.split('{'+k+'}').join(vars[k]);
+      });
+    }
+    return str;
+  }
+  function applyI18n(){
+    document.documentElement.setAttribute('lang',LANG);
+    document.querySelectorAll('[data-i18n]').forEach(function(el){
+      el.textContent=t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el){
+      el.setAttribute('placeholder',t(el.getAttribute('data-i18n-placeholder')));
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(function(el){
+      el.setAttribute('title',t(el.getAttribute('data-i18n-title')));
+    });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach(function(el){
+      el.setAttribute('aria-label',t(el.getAttribute('data-i18n-aria-label')));
+    });
+    var langSel=document.getElementById('lang-select');
+    if(langSel)langSel.value=LANG;
+    var sbTag=document.getElementById('sb-tag');
+    if(sbTag)sbTag.textContent=t('statusbar_tag');
+    var sb=document.getElementById('sb-mode');
+    if(sb&&!peer)sb.textContent=t('statusbar_idle');
+  }
+  function setLang(lang){
+    if(SUPPORTED_LANGS.indexOf(lang)===-1)return;
+    LANG=lang;
+    try{localStorage.setItem('pd_lang',lang);}catch(_){}
+    applyI18n();
+    // Refresh dynamic bits not covered by data-i18n
+    if(document.getElementById('screen-server').classList.contains('visible'))updateSrvClientsUI();
+    var rflList=document.getElementById('rfl-list');
+    if(rflList&&rflList.children.length>0)rflUpdateCount();
+    if(_ttTarget)_ttShow(_ttTarget);
+  }
+
+  /* ════════════════════════════════════════════════════════
+     UTILITAIRES
+  ════════════════════════════════════════════════════════ */
+  function escHtml(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+
+            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function fmtB(b){
+    if(b===0)return '0 B';
+    if(b<1024)return b+' B';
+    if(b<1048576)return(b/1024).toFixed(1)+' KB';
+    if(b<1073741824)return(b/1048576).toFixed(1)+' MB';
+    return(b/1073741824).toFixed(2)+' GB';
+  }
+  function sanitizeFilename(name){
+    var s=String(name).replace(/[/\\?%*:|"<>\x00]/g,'_').trim().substring(0,255)||'file';
+    // Block path traversal via bare dot names
+    if(s==='.'||s==='..')s='file';
+    // Strip trailing dots and spaces — invalid on Windows and can bypass extension filters
+    s=s.replace(/[. ]+$/,'').trim()||'file';
+    return s;
+  }
+
+  /* ════════════════════════════════════════════════════════
+     SHA-256 INTÉGRITÉ
+  ════════════════════════════════════════════════════════ */
+  function hexHash(buffer){
+    return Array.from(new Uint8Array(buffer))
+      .map(function(b){return b.toString(16).padStart(2,'0');}).join('');
+  }
+  var SHA_MAX_BYTES=500*1024*1024; // 500 MB — above this SHA-256 is disabled to avoid OOM
+  var HASH_CHUNK=4*1024*1024; // 4 MB slices
+
+  async function computeFileHash(file){
+    if(file.size>SHA_MAX_BYTES){
+      console.warn('SHA-256 skipped — file exceeds 500 MB limit');
+      return null;
+    }
+    if(file.size<=67108864){
+      var buf=await file.arrayBuffer();
+      return hexHash(await crypto.subtle.digest('SHA-256',buf));
+    }
+    var offset=0;var parts=[];
+    while(offset<file.size){
+      var slice=file.slice(offset,offset+HASH_CHUNK);
+      var ab=await slice.arrayBuffer();
+      parts.push(new Uint8Array(ab));
+      offset+=HASH_CHUNK;
+    }
+    var total=parts.reduce(function(s,p){return s+p.length;},0);
+    var merged=new Uint8Array(total);var off=0;
+    parts.forEach(function(p){merged.set(p,off);off+=p.length;});
+    return hexHash(await crypto.subtle.digest('SHA-256',merged.buffer));
+  }
+  async function computeChunksHash(chunks){
+    var total=chunks.reduce(function(s,c){return s+(c.byteLength||0);},0);
+    if(total>SHA_MAX_BYTES){console.warn('SHA-256 skipped — chunks exceed 500 MB');return null;}
+    var merged=new Uint8Array(total);
+    var off=0;
+    chunks.forEach(function(c){merged.set(new Uint8Array(c),off);off+=c.byteLength;});
+    var digest=await crypto.subtle.digest('SHA-256',merged.buffer);
+    return hexHash(digest);
+  }
+  async function computeBlobHash(blob){
+    if(blob.size>SHA_MAX_BYTES){console.warn('SHA-256 skipped — blob exceeds 500 MB');return null;}
+    if(blob.size<=67108864){
+      var buf=await blob.arrayBuffer();
+      return hexHash(await crypto.subtle.digest('SHA-256',buf));
+    }
+    var offset=0;var parts=[];
+    while(offset<blob.size){
+      var slice=blob.slice(offset,offset+HASH_CHUNK);
+      var ab=await slice.arrayBuffer();
+      parts.push(new Uint8Array(ab));
+      offset+=HASH_CHUNK;
+    }
+    var total=parts.reduce(function(s,p){return s+p.length;},0);
+    var merged=new Uint8Array(total);var off=0;
+    parts.forEach(function(p){merged.set(p,off);off+=p.length;});
+    return hexHash(await crypto.subtle.digest('SHA-256',merged.buffer));
+  }
+
+  function validateMeta(msg){
+    if(!msg||typeof msg.name!=='string'||msg.name.length===0||msg.name.length>500)return false;
+    if(typeof msg.size!=='number'||!isFinite(msg.size)||msg.size<0||msg.size>107374182400)return false;
+    if(typeof msg.idx!=='number'||!Number.isInteger(msg.idx)||msg.idx<0||msg.idx>9999)return false;
+    if(typeof msg.total!=='number'||!Number.isInteger(msg.total)||msg.total<1||msg.total>9999)return false;
+    if(msg.idx>=msg.total)return false; // idx must be strictly less than total
+    if(msg.resumeOffset!==undefined&&msg.resumeOffset!==null){
+      if(typeof msg.resumeOffset!=='number'||!Number.isInteger(msg.resumeOffset)||!isFinite(msg.resumeOffset)||msg.resumeOffset<0||msg.resumeOffset>msg.size)return false;
+    }
+    if(msg.hash!==undefined&&msg.hash!==null){
+      if(typeof msg.hash!=='string'||!/^[0-9a-f]{64}$/.test(msg.hash))return false;
+    }
+    return true;
+  }
+
+  function setStatus(id,msg,type){
+    var el=document.getElementById(id);
+    if(!el)return;
+    el.textContent=msg;el.className='status'+(type?' '+type:'');
+    if(!type)el.classList.add('pulse');
+    // Mirror to statusbar
+    var sb=document.getElementById('sb-mode');
+    if(sb&&(id==='status-receiver'||id==='status-server'))sb.textContent=msg;
+  }
+
+  function showScreen(id){
+    ['screen-role','screen-receiver','screen-server'].forEach(function(s){
+      document.getElementById(s).classList.remove('visible');
+    });
+    document.getElementById(id).classList.add('visible');
+  }
+
+  function truncName(n){return n.length>30?n.substring(0,28)+'…':n;}
+
+  /* ════════════════════════════════════════════════════════
+     ÉTAT GLOBAL
+  ════════════════════════════════════════════════════════ */
+  var peer=null;
+  // Centralized blob URL revocation — avoids accumulating one beforeunload listener per file
+  var _pendingBlobUrls=new Map();
+  window.addEventListener('beforeunload',function(){
+    _pendingBlobUrls.forEach(function(timer,url){clearTimeout(timer);URL.revokeObjectURL(url);});
+    _pendingBlobUrls.clear();
+  });
+  var conn=null;
+  var myCode='';
+  var roleChosen=false;
+  var CHUNK=256*1024;
+  var PEER_TIMEOUT=15000;
+  var reconnectTimer=null;
+  var reconnectAttempts=0;
+  var MAX_RECONNECT=8;
+  var resumeState={idx:-1,recvd:0,chunks:[]};
+  var SRV_PING_INTERVAL=4000; // server-side heartbeat sent to each connected receiver
+  var SRV_PING_TIMEOUT=9000;  // no pong within this delay ⇒ connection considered dead
+  var srvShaEnabled=false;
+  function onSrvShaToggle(el){srvShaEnabled=el.checked;}
+
+  /* ════════════════════════════════════════════════════════
+     CALCUL DE VITESSE ET ETA
+  ════════════════════════════════════════════════════════ */
+  var speedState={send:{t0:0,bytes0:0},recv:{t0:0,bytes0:0}};
+  function _speedKey(elId){return elId.indexOf('send')!==-1?'send':'recv';}
+  function updateSpeed(elId,bytesSent,totalBytes){
+    var k=_speedKey(elId),st=speedState[k];
+    var now=performance.now();
+    if(st.t0===0){st.t0=now;st.bytes0=bytesSent;return;}
+    var dt=(now-st.t0)/1000;
+    if(dt<0.4)return;
+    var rate=(bytesSent-st.bytes0)/dt;
+    st.t0=now;st.bytes0=bytesSent;
+    var rateStr=rate>1048576?(rate/1048576).toFixed(1)+' MB/s':(rate/1024).toFixed(0)+' KB/s';
+    var rem=totalBytes-bytesSent;
+    var etaStr=rate>0?' · '+fmtEta(rem/rate):'';
+    var el=document.getElementById(elId);
+    if(el)el.textContent=rateStr+etaStr;
+  }
+  function fmtEta(s){
+    if(!isFinite(s)||s<0)return '';
+    if(s<60)return Math.ceil(s)+'s';
+    if(s<3600)return Math.ceil(s/60)+'m';
+    return (s/3600).toFixed(1)+'h';
+  }
+  function resetSpeed(elId){var k=_speedKey(elId);speedState[k]={t0:0,bytes0:0};var el=document.getElementById(elId);if(el)el.textContent='';}
+
+  /* ════════════════════════════════════════════════════════
+     SON DE SUCCÈS (Web Audio API)
+  ════════════════════════════════════════════════════════ */
+  var _audioCtx=null;
+  function _getAudioCtx(){
+    if(!_audioCtx||_audioCtx.state==='closed'){
+      try{_audioCtx=new(window.AudioContext||window.webkitAudioContext)();}catch(_){_audioCtx=null;}
+    }
+    return _audioCtx;
+  }
+  function playBeep(freq,dur,vol){
+    try{
+      var ctx=_getAudioCtx();
+      if(!ctx)return;
+      // Resume context if suspended (browser autoplay policy)
+      if(ctx.state==='suspended')ctx.resume();
+      var osc=ctx.createOscillator();
+      var gain=ctx.createGain();
+      osc.connect(gain);gain.connect(ctx.destination);
+      osc.type='sine';osc.frequency.setValueAtTime(freq||880,ctx.currentTime);
+      gain.gain.setValueAtTime(vol||0.18,ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+(dur||0.3));
+      osc.start(ctx.currentTime);osc.stop(ctx.currentTime+(dur||0.3));
+    }catch(e){}
+  }
+  function playSuccessSound(){
+    playBeep(660,0.18,0.15);
+    setTimeout(function(){playBeep(880,0.22,0.18);},150);
+  }
+
+  /* ════════════════════════════════════════════════════════
+     INDICATEUR DE CONNEXION + PING/PONG RTT
+  ════════════════════════════════════════════════════════ */
+  var pingTimer=null,pingT0=0,pingWait=false,pingTimeoutTimer=null;
+  function setConnState(state,label,ping){
+    var bar=document.getElementById('conn-bar');
+    var dot=document.getElementById('conn-dot');
+    var lbl=document.getElementById('conn-label');
+    var pngEl=document.getElementById('conn-ping');
+    if(!bar)return;
+    bar.style.display='flex';
+    dot.className='conn-dot '+state;
+    lbl.className='conn-label '+state;
+    lbl.textContent=label||'';
+    pngEl.textContent=ping||'';
+  }
+  function startPing(){
+    stopPing();
+    pingTimer=setInterval(function(){
+      if(conn&&conn.open&&!pingWait){
+        pingT0=performance.now();pingWait=true;
+        try{conn.send({type:'ping',t:pingT0});}catch(_){pingWait=false;return;}
+        pingTimeoutTimer=setTimeout(function(){
+          if(pingWait){
+            pingWait=false;
+            setConnState('err',t('conn_no_response'));
+            console.warn('Ping timeout — pong not received within 5s');
+          }
+        },5000);
+      }
+    },2500);
+  }
+  function stopPing(){
+    if(pingTimer){clearInterval(pingTimer);pingTimer=null;}
+    if(pingTimeoutTimer){clearTimeout(pingTimeoutTimer);pingTimeoutTimer=null;}
+    pingWait=false;
+  }
+
+  /* ════════════════════════════════════════════════════════
+     BACK-PRESSURE WEBRTC
+  ════════════════════════════════════════════════════════ */
+  var HIGH_WATER=1024*1024;
+  var LOW_WATER =256*1024;
+
+  function scrollToActive(queueId){
+    var container=document.getElementById(queueId);
+    if(!container)return;
+    var active=container.querySelector('.fq-item.active');
+    if(!active)return;
+    if(typeof active.scrollIntoView==='function'){
+      active.scrollIntoView({behavior:'smooth',block:'nearest'});
+    } else {
+      var itemTop=active.offsetTop-container.offsetTop;
+      var target=itemTop-(container.clientHeight/2)+(active.offsetHeight/2);
+      container.scrollTop=Math.max(0,target);
+    }
+  }
+
+  function genCode(){
+    var c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',s='',rnd=new Uint32Array(6);
+    crypto.getRandomValues(rnd);
+    for(var i=0;i<6;i++)s+=c[rnd[i]%c.length];
+    return s;
+  }
+
+  /* ════════════ CHOIX DE ROLE ════════════ */
+  function chooseRole(role){
+    if(roleChosen)return;
+    roleChosen=true;
+    document.getElementById('btn-receiver').disabled=true;
+    document.getElementById('btn-server').disabled=true;
+    document.getElementById('btn-'+role).classList.add('selected');
+    var hint=document.querySelector('.role-hint');
+    if(hint){hint.className='role-hint status ok';hint.textContent=t('role_hint_loading');}
+    if(role==='server')initServer();
+    else initReceiver();
+  }
+
+  /* ════════════ MAKE FQ ITEM ════════════ */
+  function makeFqItem(f){
+    var item=document.createElement('div');item.className='fq-item';
+    var stEl=document.createElement('span');stEl.className='fq-st';stEl.textContent='—';
+    var shaEl=document.createElement('span');shaEl.className='sha-badge waiting';shaEl.title='';shaEl.textContent='SHA-256';
+    var trackDiv=document.createElement('div');trackDiv.className='mini-track';trackDiv.style.width='100%';
+    var barDiv=document.createElement('div');barDiv.className='mini-bar';
+    trackDiv.appendChild(barDiv);
+    item.innerHTML='<span class="fq-icon-sm">'+icoSvg('file',14)+'</span>'
+      +'<span class="fq-name">'+escHtml(truncName(f.name))+'</span>'
+      +'<span class="fq-size">'+fmtB(f.size)+'</span>';
+    item.appendChild(stEl);
+    item.appendChild(shaEl);
+    var rmBtn=document.createElement('span');
+    rmBtn.className='fq-remove';
+    item.appendChild(rmBtn);
+    var prow=document.createElement('div');prow.className='fq-prow';
+    prow.appendChild(trackDiv);item.appendChild(prow);
+    return {el:item,barEl:barDiv,stEl:stEl,shaEl:shaEl};
+  }
+
+  function clearReceived(){
+    if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;reconnectAttempts=0;}
+    var rq=document.getElementById('recv-queue');
+    if(rq){rq.innerHTML='';rq.style.display='none';}
+    document.getElementById('recv-table-header').style.display='none';
+    document.getElementById('btn-clear-recv').style.display='none';
+    document.getElementById('recv-progress').style.display='none';
+    document.getElementById('recv-done-msg').style.display='none';
+    var bc=document.getElementById('btn-connect');if(bc)bc.disabled=false;
+    // Reset resume state so next connect doesn't try to resume old files
+    resumeState={idx:-1,recvd:0,chunks:[]};
+    window._rItems={};
+    // NOTE: _rflDownloaded is intentionally NOT reset here.
+    // It tracks files received during this session so they stay marked as done
+    // after a UI clear — the only mechanism mobile has (no disk scan available).
+    // Expand form if currently disconnected so user can re-enter a code
+    if(!conn||!conn.open)expandRecvForm();
+    // If connected to a server, re-show the file selection list instead of the dropzone
+    if(_rflFiles&&_rflFiles.length>0&&_rflConn&&_rflConn.open){
+      showRecvFilelist(_rflFiles,_rflConn).catch(function(e){console.error('showRecvFilelist error',e);});
+    } else {
+      document.getElementById('recv-dropzone').classList.remove('hidden');
+    }
+  }
+
+  /* ════════════ RECEIVER FORM COLLAPSE ════════════ */
+  function minimizeRecvForm(code){
+    var form=document.querySelector('#screen-receiver .recv-form');
+    if(form)form.classList.add('minimized');
+    var mc=document.getElementById('recv-mini-code');
+    if(mc)mc.textContent=code||'';
+    var mf=document.getElementById('recv-mini-folder');
+    if(mf)mf.textContent=dirHandle?dirHandle.name:'';
+  }
+  function expandRecvForm(){
+    var form=document.querySelector('#screen-receiver .recv-form');
+    if(form)form.classList.remove('minimized');
+    // Disable connect button if a live connection already exists
+    var bc=document.getElementById('btn-connect');
+    if(bc)bc.disabled=!!(conn&&conn.open);
+  }
+
+  /* ════════════ RECEIVER INIT ════════════ */
+  function initReceiver(){
+    showScreen('screen-receiver');
+    setStatus('status-receiver',t('recv_status_default'),'');
+    document.getElementById('sb-mode').textContent=t('app_receive_mode');
+
+    if(window._receiverOfflineListener){
+      window.removeEventListener('offline',window._receiverOfflineListener);
+      window.removeEventListener('online',window._receiverOnlineListener);
+    }
+    window._receiverOfflineListener=function(){
+      setStatus('status-receiver',t('msg_network_offline'),'err');
+    };
+    window._receiverOnlineListener=function(){
+      setStatus('status-receiver',t('msg_network_back'),'info');
+      connectToPeer(true);
+    };
+    window.addEventListener('offline',window._receiverOfflineListener);
+    window.addEventListener('online',window._receiverOnlineListener);
+  }
+
+  var dirHandle=null;
+
+  function onDirPathClick(){
+    if(dirHandle)pickDirectory();
+  }
+
+  async function pickDirectory(){
+    if(!window.showDirectoryPicker){
+      // iOS Safari doesn't support File System Access API at all
+      var isIOS=/iP(hone|od|ad)/.test(navigator.userAgent)||
+        (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+      if(isIOS){
+        setStatus('status-receiver',t('msg_ios_no_folder'),'info');
+      } else {
+        setStatus('status-receiver',t('msg_folder_not_supported'),'info');
+      }
+      return;
+    }
+    try{
+      dirHandle=await window.showDirectoryPicker({mode:'readwrite'});
+      document.getElementById('btn-dir').classList.add('chosen');
+      var dp=document.getElementById('dir-path');
+      dp.textContent=dirHandle.name;
+      dp.title=dirHandle.name;
+      dp.classList.add('has-dir');
+      var clrBtn=document.getElementById('btn-dir-clear');
+      if(clrBtn)clrBtn.style.display='';
+    }catch(e){
+      if(e.name!=='AbortError'){
+        setStatus('status-receiver',t('msg_folder_access_error',{err:e.message||e}),'err');
+      }
+    }
+  }
+
+  function clearDirectory(){
+    dirHandle=null;
+    document.getElementById('btn-dir').classList.remove('chosen');
+    var dp=document.getElementById('dir-path');
+    dp.textContent=t('recv_dir_auto');
+    dp.title='';
+    dp.classList.remove('has-dir');
+    var clrBtn=document.getElementById('btn-dir-clear');
+    if(clrBtn)clrBtn.style.display='none';
+  }
+
+  var _connecting=false;
+  function connectToPeer(isReconnect){
+    if(_connecting)return;
+    _connecting=true;
+    if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+    // Manual connect resets the retry counter
+    if(!isReconnect)reconnectAttempts=0;
+    var codeEl=document.getElementById('peer-code');
+    var code=codeEl.value.trim().toUpperCase();
+    if(!/^[A-HJ-NP-Z2-9]{6}$/.test(code)){setStatus('status-receiver',t('msg_invalid_code'),'err');_connecting=false;return;}
+    document.getElementById('btn-connect').disabled=true;
+    setStatus('status-receiver',t('msg_connecting_to',{code:code}),'');
+    setConnState('waiting',t('conn_connecting'));
+
+    var _connectCancelled=false;
+    var initTimer=setTimeout(function(){
+      _connectCancelled=true;
+      setStatus('status-receiver',t('msg_conn_timeout_recv'),'err');
+      document.getElementById('btn-connect').disabled=false;
+      _connecting=false;
+      if(peer)peer.off('open',doConnect);
+    },PEER_TIMEOUT);
+
+    if(!peer||peer.destroyed){
+      peer=new Peer({debug:0,serialization:'binary'});
+    }
+
+    function doConnect(){
+      if(_connectCancelled)return;
+      clearTimeout(initTimer);
+      if(conn){try{conn.close();}catch(_){} conn=null;}
+      // Only reset receiver UI on a fresh (non-resume) connect
+      var isFreshConnect=(resumeState.idx===-1&&resumeState.recvd===0);
+      var rqFresh=document.getElementById('recv-queue');
+      if(isFreshConnect&&rqFresh&&rqFresh.children.length>0){
+        rqFresh.innerHTML='';rqFresh.style.display='none';
+        document.getElementById('recv-table-header').style.display='none';
+        window._rItems={};
+        document.getElementById('recv-dropzone').classList.remove('hidden');
+        document.getElementById('recv-done-msg').style.display='none';
+        document.getElementById('recv-progress').style.display='none';
+        document.getElementById('btn-clear-recv').style.display='none';
+      }
+      // Fresh connect to a (possibly different) server — reset downloaded tracking
+      if(isFreshConnect){_rflDownloaded=new Set();}
+      conn=peer.connect(code,{reliable:true,serialization:'binary'});
+      _connecting=false;
+      attachReceiverConn();
+    }
+    if(peer.open){doConnect();}
+    else{
+      var _onPeerError=function(e){
+        clearTimeout(initTimer);
+        _connectCancelled=true;
+        setStatus('status-receiver',t('msg_could_not_connect',{err:e.type||e}),'err');
+        document.getElementById('btn-connect').disabled=false;
+        _connecting=false;
+        try{peer.destroy();}catch(_){}
+        peer=null;
+      };
+      peer.once('open',function(){
+        // Remove the error listener so it cannot fire after a successful connection
+        peer.off('error',_onPeerError);
+        doConnect();
+      });
+      peer.once('error',_onPeerError);
+    }
+  }
+
+  function attachReceiverConn(){
+    var writable=null;
+    // Always start from the current window._rItems so clearReceived() takes effect
+    window._rItems=window._rItems||{};
+    var rItems=window._rItems;
+    var recvMeta=null;
+    var msgQueue=[];
+    var processing=false;
+
+    var _helloTimeoutTimer=null;
+
+    conn.on('open',function(){
+      reconnectAttempts=0;clearTimeout(reconnectTimer);
+      setStatus('status-receiver',t('msg_connected_waiting_files'),'ok');
+      setConnState('ok',t('conn_connected'));
+      startPing();
+      document.getElementById('btn-connect').disabled=false;
+      // Collapse the form on mobile to free vertical space for the file list
+      var codeVal=document.getElementById('peer-code').value.trim().toUpperCase();
+      minimizeRecvForm(codeVal);
+      var helloMsg={type:'hello',idx:resumeState.idx,offset:resumeState.recvd};
+      try{conn.send(helloMsg);}catch(_){}
+      // If server sends nothing within 10s, warn the user
+      _helloTimeoutTimer=setTimeout(function(){
+        if(conn&&conn.open&&!recvMeta){
+          setStatus('status-receiver',t('msg_connected_no_data'),'info');
+        }
+      },10000);
+    });
+
+    conn.on('close',function(){
+      stopPing();
+      if(_helloTimeoutTimer){clearTimeout(_helloTimeoutTimer);_helloTimeoutTimer=null;}
+      if(writable){try{writable.close();}catch(_){}writable=null;}
+      setConnState('waiting',t('conn_disconnected'));
+      setStatus('status-receiver',t('msg_conn_closed'),'err');
+      expandRecvForm();
+      conn=null;
+      if(reconnectAttempts<MAX_RECONNECT){
+        reconnectAttempts++;
+        var delay=Math.min(1000*Math.pow(1.5,reconnectAttempts),15000);
+        setStatus('status-receiver',t('msg_reconnecting_attempt',{s:(delay/1000).toFixed(0),n:reconnectAttempts}),'');
+        reconnectTimer=setTimeout(function(){_connecting=false;connectToPeer(true);},delay);
+      } else {
+        // All reconnect attempts exhausted — auto-reset UI after 5s
+        setStatus('status-receiver',t('msg_server_unreachable'),'err');
+        setTimeout(function(){
+          reconnectAttempts=0;
+          resumeState={idx:-1,recvd:0,chunks:[]};
+          window._rItems={};
+          var rq=document.getElementById('recv-queue');
+          if(rq){rq.innerHTML='';rq.style.display='none';}
+          document.getElementById('recv-table-header').style.display='none';
+          document.getElementById('recv-progress').style.display='none';
+          document.getElementById('recv-done-msg').style.display='none';
+          document.getElementById('btn-clear-recv').style.display='none';
+          document.getElementById('recv-filelist').style.display='none';
+          document.getElementById('recv-dropzone').classList.remove('hidden');
+          var bc=document.getElementById('btn-connect');if(bc)bc.disabled=false;
+          _rflFiles=[];_rflConn=null;
+          setConnState('waiting',t('conn_disconnected'));
+          expandRecvForm();
+          setStatus('status-receiver',t('msg_server_disconnected'),'err');
+        },5000);
+      }
+    });
+
+    async function processMsg(msg){
+      if(!msg)return;
+      // Capture local conn reference — outer `conn` may be null after disconnect
+      var localConn=conn;
+      if(typeof msg==='object'&&!(msg instanceof ArrayBuffer)&&msg.type){
+        if(msg.type==='ping'){try{if(localConn&&localConn.open)localConn.send({type:'pong',t:msg.t});}catch(_){}return;}
+        if(msg.type==='pong'&&pingWait){
+          var rtt=Math.round(performance.now()-pingT0);pingWait=false;
+          if(pingTimeoutTimer){clearTimeout(pingTimeoutTimer);pingTimeoutTimer=null;}
+          setConnState('ok',t('conn_connected'),'· '+rtt+' ms');
+          return;
+        }
+        // SERVER MODE: receive file list with checkboxes
+        if(msg.type==='filelist'){
+          if(_helloTimeoutTimer){clearTimeout(_helloTimeoutTimer);_helloTimeoutTimer=null;}
+          // Ignore filelist updates while a download is actively in progress
+          // (server broadcasting after adding a file must not disrupt ongoing transfers)
+          var rqActive=document.getElementById('recv-queue');
+          if(recvMeta!==null||(rqActive&&rqActive.style.display!=='none'&&rqActive.children.length>0)){
+            // Validate before storing silently
+            var rawSilent=Array.isArray(msg.files)?msg.files:[];
+            _rflFiles=rawSilent.filter(function(f,i){
+              return f&&typeof f.name==='string'&&f.name.length>0&&f.name.length<=500
+                &&typeof f.size==='number'&&isFinite(f.size)&&f.size>=0&&f.size<=107374182400
+                &&typeof f.idx==='number'&&Number.isInteger(f.idx)&&f.idx===i;
+            });
+            _rflConn=conn;
+            return;
+          }
+          _rflConn=conn;
+          var rawFiles=Array.isArray(msg.files)?msg.files:[];
+          // Validate each entry — reject malformed items
+          var validFiles=rawFiles.filter(function(f,i){
+            return f&&typeof f.name==='string'&&f.name.length>0&&f.name.length<=500
+              &&typeof f.size==='number'&&isFinite(f.size)&&f.size>=0&&f.size<=107374182400
+              &&typeof f.idx==='number'&&Number.isInteger(f.idx)&&f.idx===i;
+          });
+          showRecvFilelist(validFiles,conn).catch(function(e){console.error('showRecvFilelist error',e);});
+          return;
+        }
+        if(msg.type==='meta'){
+          if(_helloTimeoutTimer){clearTimeout(_helloTimeoutTimer);_helloTimeoutTimer=null;}
+          if(!validateMeta(msg)){console.warn('Invalid meta',msg);return;}
+          var MEM_WARN_BYTES=200*1024*1024;
+          if(msg.size>MEM_WARN_BYTES&&!dirHandle){setStatus('status-receiver',t('msg_large_file',{size:fmtB(msg.size)}),'info');}
+          var resumeOffset=msg.resumeOffset||0;
+          var key=msg.idx+'_'+msg.name;
+          // resumeOffset must be >0 to actually resume; 0 means sender restarts from scratch
+          var isResume=(msg.idx===resumeState.idx&&resumeState.recvd>0&&resumeOffset>0);
+          var startRecvd=isResume?Math.min(resumeState.recvd,resumeOffset):0;
+          if(!isResume){resumeState={idx:msg.idx,recvd:0,chunks:[]};}
+          else{resumeState.idx=msg.idx;}
+          recvMeta=msg;
+          rItems[key]?rItems[key].recvd=startRecvd:null;
+
+          var rq=document.getElementById('recv-queue');
+          var rb=document.getElementById('recv-bar');
+          var rpct=document.getElementById('recv-pct');
+          rq.style.display='flex';
+          document.getElementById('recv-table-header').style.display='grid';
+          document.getElementById('recv-dropzone').classList.add('hidden');
+          document.getElementById('recv-progress').style.display='flex';
+          var resumeP=msg.size>0?startRecvd/msg.size:0;
+          rb.style.transform='scaleX('+resumeP+')';rpct.textContent=Math.round(resumeP*100)+'%';
+          document.getElementById('recv-file-label').textContent=truncName(msg.name);
+          resetSpeed('recv-speed');
+
+          if(!rItems[key]){
+            var parts=makeFqItem({name:msg.name,size:msg.size});
+            parts.el.classList.add('active');
+            parts.stEl.textContent='…';parts.stEl.className='fq-st sending';
+            rq.appendChild(parts.el);
+            if(parts.shaEl){
+              if(msg.hash){
+                parts.shaEl.className='sha-badge waiting';
+                parts.shaEl.textContent='# '+msg.hash.substring(0,8)+'…';
+                parts.shaEl.title=t('sha_expected_title',{hash:msg.hash});
+              } else {
+                parts.shaEl.className='sha-badge waiting';
+                parts.shaEl.textContent=t('sha_no_hash');
+                parts.shaEl.title=t('sha_not_provided');
+              }
+            }
+            rItems[key]={el:parts.el,barEl:parts.barEl,stEl:parts.stEl,shaEl:parts.shaEl,recvd:startRecvd,expectedHash:msg.hash||null,resumedFrom:startRecvd,senderSha:msg.sha===true};
+            setTimeout(function(){scrollToActive('recv-queue');},50);
+          } else {
+            rItems[key].el.classList.remove('paused');rItems[key].el.classList.add('active');
+            rItems[key].stEl.textContent='…';rItems[key].stEl.className='fq-st sending';
+            scrollToActive('recv-queue');
+          }
+          rItems[key].barEl.style.transform='scaleX('+resumeP+')';
+
+          if(msg.size===0){
+            var _connEmpty=conn; // capture now — no await below but defensive
+            var it0=rItems[key];
+            if(it0){it0.el.classList.remove('active');it0.el.classList.add('done');it0.stEl.innerHTML=icoSvg('check',12);it0.stEl.className='fq-st done';}
+            setStatus('status-receiver',t('msg_file_empty_received',{name:truncName(msg.name)}),'ok');
+            playSuccessSound();
+            _rflDownloaded.add(msg.name);
+            try{if(_connEmpty)_connEmpty.send({type:'ack',idx:msg.idx,name:msg.name});}catch(_){}
+            if(msg.idx+1>=msg.total){
+              try{if(_connEmpty)_connEmpty.send({type:'ack_all'});}catch(_){}
+              document.getElementById('recv-progress').style.display='none';
+              setStatus('status-receiver',t('msg_all_received'),'ok');
+              document.getElementById('btn-clear-recv').style.display='inline-block';
+              var dm0=document.getElementById('recv-done-msg');
+              document.getElementById('recv-done-detail').textContent=t('msg_files_downloaded_successfully',{n:msg.total});
+              dm0.style.display='flex';
+            }
+            return;
+          }
+
+          if(dirHandle){
+            if(writable){try{await writable.close();}catch(_){}writable=null;}
+            try{
+              var safeName=sanitizeFilename(msg.name);
+              var fh=await dirHandle.getFileHandle(safeName,{create:true});
+              if(isResume&&startRecvd>0){
+                try{
+                  writable=await fh.createWritable({keepExistingData:true});
+                  if(typeof writable.seek==='function'){
+                    await writable.seek(startRecvd);
+                  } else {
+                    await writable.close();
+                    writable=await fh.createWritable();
+                    startRecvd=0;resumeState.recvd=0;rItems[key].recvd=0;
+                  }
+                }catch(_){writable=await fh.createWritable();startRecvd=0;resumeState.recvd=0;rItems[key].recvd=0;}
+              } else {
+                writable=await fh.createWritable();
+              }
+            }catch(e){
+              setStatus('status-receiver',t('msg_cannot_write_folder',{err:e.message||e}),'err');
+              dirHandle=null;
+              document.getElementById('btn-dir').classList.remove('chosen');
+              var dpErr=document.getElementById('dir-path');
+              dpErr.textContent=t('recv_dir_auto');
+              dpErr.classList.remove('has-dir');
+            }
+          }
+          return;
+        }
+        return;
+      }
+
+      // Binary chunk
+      if(!(msg instanceof ArrayBuffer)&&!(msg instanceof Uint8Array)){return;}
+      if(!recvMeta){return;}
+      var key2=recvMeta.idx+'_'+recvMeta.name;
+      var itemRef=rItems[key2];
+      if(!itemRef){return;}
+      // Always extract an exact ArrayBuffer — Uint8Array.buffer may be a larger shared backing store
+      var chunk;
+      if(msg instanceof ArrayBuffer){
+        chunk=msg;
+      } else {
+        chunk=(msg.byteOffset===0&&msg.byteLength===msg.buffer.byteLength)
+          ? msg.buffer
+          : msg.buffer.slice(msg.byteOffset, msg.byteOffset+msg.byteLength);
+      }
+      // Security: reject absurdly large single chunks and ignore bytes past meta.size
+      if(chunk.byteLength > CHUNK * 4){console.warn('Chunk too large, dropping:',chunk.byteLength);return;}
+      var remaining=recvMeta.size - itemRef.recvd;
+      if(remaining<=0){return;}
+      if(chunk.byteLength > remaining){chunk=chunk.slice(0,remaining);}
+      itemRef.recvd+=chunk.byteLength;
+      resumeState.recvd=itemRef.recvd;
+
+      var p=recvMeta.size>0?itemRef.recvd/recvMeta.size:1;
+      itemRef.barEl.style.transform='scaleX('+p+')';
+      itemRef.stEl.textContent=Math.round(p*100)+'%';
+      itemRef.stEl.className='fq-st sending';
+      var rb2=document.getElementById('recv-bar');
+      var rpct2=document.getElementById('recv-pct');
+      if(rb2)rb2.style.transform='scaleX('+p+')';
+      if(rpct2)rpct2.textContent=Math.round(p*100)+'%';
+      updateSpeed('recv-speed',itemRef.recvd,recvMeta.size);
+      if(!itemRef._scrolled){itemRef._scrolled=true;scrollToActive('recv-queue');}
+
+      if(dirHandle&&writable){
+        try{await writable.write(chunk);}
+        catch(e){
+          setStatus('status-receiver',t('msg_write_error',{err:e.message||e}),'err');
+          // Abort — close writable, clear state so next meta starts fresh
+          try{writable.close();}catch(_){}writable=null;
+          resumeState={idx:-1,recvd:0,chunks:[]};
+          recvMeta=null;
+          return;
+        }
+      } else {
+        resumeState.chunks.push(chunk);
+      }
+
+      if(itemRef.recvd>=recvMeta.size){
+        // Snapshot ALL closure-captured mutable state before any async yield
+        var _meta=recvMeta, _item=itemRef, _chunks=resumeState.chunks.slice();
+        var _writable=writable; writable=null; // hand off ownership
+        var _conn=conn; // capture conn now — it may change after async yields
+        var _finalize=async function(){
+          // Yield to let the event loop breathe before heavy operations
+          await new Promise(function(r){setTimeout(r,0);});
+
+          var hashOk=null;
+          if(_item.expectedHash){
+            if(_item.shaEl){_item.shaEl.className='sha-badge hashing';_item.shaEl.textContent=t('sha_verifying');}
+            try{
+              var computedHash;
+              if(dirHandle&&_writable){
+                await _writable.close();_writable=null;
+                var fhr=await dirHandle.getFileHandle(sanitizeFilename(_meta.name));
+                var fr=await fhr.getFile();
+                computedHash=await computeBlobHash(fr);
+              } else {
+                computedHash=await computeChunksHash(_chunks);
+              }
+              hashOk=(computedHash!==null&&computedHash===_item.expectedHash);
+              if(_item.shaEl){
+                if(computedHash===null){
+                  _item.shaEl.className='sha-badge waiting';
+                  _item.shaEl.textContent='> 500 MB';
+                  _item.shaEl.title=t('sha_too_large_verify');
+                } else {
+                  _item.shaEl.className='sha-badge '+(hashOk?'ok':'err');
+                  _item.shaEl.innerHTML=icoSvg(hashOk?'check':'x',11)+' '+t(hashOk?'sha_ok':'sha_fail');
+                  _item.shaEl.title=(hashOk?t('sha_match_prefix'):t('sha_mismatch_prefix'))+_item.expectedHash+(hashOk?'':'\nGot: '+computedHash);
+                }
+              }
+            }catch(e){hashOk=null;if(_item.shaEl){_item.shaEl.className='sha-badge err';_item.shaEl.textContent=t('sha_hash_err');}}
+          }
+
+          if(dirHandle&&_writable){try{await _writable.close();}catch(_){}}
+
+          // Reset resumeState early so the next file can start accumulating chunks
+          // while the Blob is being constructed below
+          resumeState={idx:-1,recvd:0,chunks:[]};
+
+          // If hash check explicitly failed — abort: mark file bad, do not save, do not ACK
+          if(hashOk===false){
+            _item.el.classList.remove('active');_item.el.classList.add('paused');
+            _item.stEl.innerHTML=icoSvg('x',12)+' '+t('st_bad');_item.stEl.className='fq-st paused';
+            setStatus('status-receiver',t('msg_hash_mismatch',{name:truncName(_meta.name)}),'err');
+            // Attempt to delete the corrupt file from disk if dirHandle exists
+            if(dirHandle){
+              try{await dirHandle.removeEntry(sanitizeFilename(_meta.name));}catch(_){}
+            }
+            if(recvMeta===_meta)recvMeta=null;
+            return;
+          }
+
+          if(!dirHandle){
+            // Yield again before Blob construction — can freeze thread for large files
+            await new Promise(function(r){setTimeout(r,0);});
+            saveBlob(_meta,_chunks,_item);
+          } else {
+            _item.el.classList.remove('active');_item.el.classList.add('done');
+            _item.stEl.innerHTML=icoSvg('check',12)+' '+t('st_saved');_item.stEl.className='fq-st done';
+            setStatus('status-receiver',t('msg_file_saved',{name:truncName(_meta.name)}),'ok');
+            playSuccessSound();
+          }
+
+          // Track downloaded file name for re-display after Clear Received
+          _rflDownloaded.add(_meta.name);
+
+          try{if(_conn)_conn.send({type:'ack',idx:_meta.idx,name:_meta.name});}catch(_){}
+
+          if(_meta&&_meta.idx+1>=_meta.total){
+            try{if(_conn)_conn.send({type:'ack_all'});}catch(_){}
+            document.getElementById('recv-progress').style.display='none';
+            setStatus('status-receiver',t('msg_all_received'),'ok');
+            document.getElementById('btn-clear-recv').style.display='inline-block';
+            var doneMsg=document.getElementById('recv-done-msg');
+            var total2=_meta.total;
+            document.getElementById('recv-done-detail').textContent=t('msg_files_downloaded_successfully',{n:total2});
+            doneMsg.style.display='flex';
+          }
+          // Clear recvMeta so stray chunks after last byte are ignored cleanly
+          if(recvMeta===_meta)recvMeta=null;
+        };
+        await _finalize();
+      }
+    }
+
+    async function drainQueue(){
+      processing=true;
+      while(msgQueue.length>0){
+        var m=msgQueue.shift();
+        try{await processMsg(m);}catch(e){console.error('processMsg error',e);}
+      }
+      processing=false;
+    }
+
+    conn.on('data',function(msg){
+      msgQueue.push(msg);
+      if(!processing)drainQueue();
+    });
+    conn.on('error',function(e){
+      setStatus('status-receiver',t('msg_conn_error',{err:e.type||e}),'err');
+      stopPing();setConnState('err',t('conn_error'));
+      if(_helloTimeoutTimer){clearTimeout(_helloTimeoutTimer);_helloTimeoutTimer=null;}
+      if(writable){try{writable.close();}catch(_){}writable=null;}
+      document.getElementById('btn-connect').disabled=false;
+      conn=null;
+      if(reconnectAttempts<MAX_RECONNECT){
+        reconnectAttempts++;
+        var delay=Math.min(1000*Math.pow(1.5,reconnectAttempts),15000);
+        setStatus('status-receiver',t('msg_reconnecting_attempt',{s:(delay/1000).toFixed(0),n:reconnectAttempts}),'');
+        reconnectTimer=setTimeout(function(){_connecting=false;connectToPeer(true);},delay);
+      } else {
+        // Same auto-reset as conn.on('close') after exhausted retries
+        setStatus('status-receiver',t('msg_server_unreachable'),'err');
+        setTimeout(function(){
+          reconnectAttempts=0;
+          resumeState={idx:-1,recvd:0,chunks:[]};
+          window._rItems={};
+          var rq=document.getElementById('recv-queue');
+          if(rq){rq.innerHTML='';rq.style.display='none';}
+          document.getElementById('recv-table-header').style.display='none';
+          document.getElementById('recv-progress').style.display='none';
+          document.getElementById('recv-done-msg').style.display='none';
+          document.getElementById('btn-clear-recv').style.display='none';
+          document.getElementById('recv-filelist').style.display='none';
+          document.getElementById('recv-dropzone').classList.remove('hidden');
+          var bc=document.getElementById('btn-connect');if(bc)bc.disabled=false;
+          _rflFiles=[];_rflConn=null;
+          setConnState('waiting',t('conn_disconnected'));
+          expandRecvForm();
+          setStatus('status-receiver',t('msg_server_disconnected'),'err');
+        },5000);
+      }
+    });
+  }
+
+  /* ════════════════════════════════════════════════════════
+     SERVER MODE
+  ════════════════════════════════════════════════════════ */
+  var serverConns=[];      // active connections
+  var serverFileQueue=[];  // {file, el, barEl, stEl} — files the server hosts
+  var _srvRecvCounter=0;   // sequential receiver number for display
+
+  var MAX_SERVER_CONNS=20; // DoS protection
+
+  function initServer(){
+    showScreen('screen-server');
+    myCode=genCode();
+    setConnState('waiting',t('conn_waiting_receivers'));
+    document.getElementById('sb-mode').textContent=t('app_server_mode');
+    setStatus('status-server',t('msg_init'),'');
+    updateSrvClientsUI();
+
+    var srvDz=document.getElementById('srv-dropzone');
+    srvDz.addEventListener('dragover',function(e){e.preventDefault();srvDz.classList.add('drag-over');});
+    srvDz.addEventListener('dragleave',function(e){if(!srvDz.contains(e.relatedTarget))srvDz.classList.remove('drag-over');});
+    srvDz.addEventListener('drop',function(e){e.preventDefault();srvDz.classList.remove('drag-over');addSrvFiles(e.dataTransfer.files);});
+
+    var initTimer=setTimeout(function(){
+      setStatus('status-server',t('msg_conn_timeout'),'err');
+    },PEER_TIMEOUT);
+
+    peer=new Peer(myCode,{debug:0,serialization:'binary'});
+    peer.on('open',function(id){
+      clearTimeout(initTimer);
+      document.getElementById('srv-code').textContent=id;
+      setStatus('status-server',t('msg_server_ready'),'ok');
+    });
+    peer.on('connection',function(c){
+      if(serverConns.filter(function(x){return x.open;}).length>=MAX_SERVER_CONNS){
+        try{c.close();}catch(_){}
+        console.warn('Max connections reached — rejected incoming connection');
+        return;
+      }
+      serverConns.push(c);
+      updateSrvClientsUI();
+      attachServerConn(c);
+    });
+    peer.on('error',function(e){
+      clearTimeout(initTimer);
+      setStatus('status-server',t('msg_peer_error',{err:e.type||e}),'err');
+      roleChosen=false;
+      showScreen('screen-role');
+      var bar=document.getElementById('conn-bar');if(bar)bar.style.display='none';
+      document.getElementById('btn-receiver').disabled=false;
+      document.getElementById('btn-server').disabled=false;
+      document.getElementById('btn-server').classList.remove('selected');
+      try{peer.destroy();}catch(_){}
+      peer=null;
+    });
+  }
+
+  /* ── Create receiver UI row ── */
+  function createReceiverRow(num){
+    var panel=document.getElementById('srv-receivers-panel');
+    panel.classList.add('visible');
+    var list=document.getElementById('srv-recv-list');
+
+    var item=document.createElement('div');
+    item.className='srv-recv-item';
+
+    var idEl=document.createElement('span');
+    idEl.className='srv-recv-id';
+    idEl.textContent='RCV '+num;
+
+    var progWrap=document.createElement('div');
+    progWrap.className='srv-recv-prog-wrap';
+    var fnEl=document.createElement('span');
+    fnEl.className='srv-recv-filename';
+    fnEl.textContent=t('srv_waiting_request');
+    var track=document.createElement('div');
+    track.className='srv-recv-track';
+    var bar=document.createElement('div');
+    bar.className='srv-recv-bar';
+    track.appendChild(bar);
+    progWrap.appendChild(fnEl);
+    progWrap.appendChild(track);
+
+    var pctEl=document.createElement('span');
+    pctEl.className='srv-recv-pct';
+    pctEl.textContent='—';
+
+    var speedEl=document.createElement('span');
+    speedEl.className='srv-recv-speed';
+    speedEl.textContent='';
+
+    var ackEl=document.createElement('span');
+    ackEl.className='srv-ack-badge waiting';
+    ackEl.innerHTML=icoSvg('clock',11)+' '+t('badge_waiting');
+
+    item.appendChild(idEl);
+    item.appendChild(progWrap);
+    item.appendChild(pctEl);
+    item.appendChild(speedEl);
+    item.appendChild(ackEl);
+    list.appendChild(item);
+
+    return {el:item, fnEl:fnEl, bar:bar, pctEl:pctEl, speedEl:speedEl, ackEl:ackEl};
+  }
+
+  function attachServerConn(c){
+    c._srvSending=false;
+    c._srvQueue=[];
+    c._srvIdx=0;
+    c._sendGen=0;
+    _srvRecvCounter++;
+    c._recvNum=_srvRecvCounter;
+    c._ackCount=0;
+    c._totalRequested=0;
+    // speed tracking per receiver
+    c._speedT0=0; c._speedBytes0=0;
+    c._finalized=false;
+    c._dead=false;
+    c._pingWait=false;
+
+    /* ── Heartbeat: server actively pings each receiver — WebRTC's own
+       close/error events can be delayed or never fire on an abrupt
+       disconnect (network loss, tab killed) while a transfer is in
+       flight, which would otherwise leave the gauge/row stuck. ── */
+    function startPingSrv(){
+      stopPingSrv();
+      c._pingTimer=setInterval(function(){
+        if(!c||!c.open||c._finalized)return;
+        if(c._pingWait)return; // previous ping still outstanding — its own timeout will fire
+        c._pingWait=true;
+        c._pingT0=performance.now();
+        try{c.send({type:'ping',t:c._pingT0});}catch(_){c._pingWait=false;return;}
+        c._pingTimeoutTimer=setTimeout(function(){
+          if(c._pingWait){
+            c._pingWait=false;
+            handleServerConnLost();
+          }
+        },SRV_PING_TIMEOUT);
+      },SRV_PING_INTERVAL);
+    }
+    function stopPingSrv(){
+      if(c._pingTimer){clearInterval(c._pingTimer);c._pingTimer=null;}
+      if(c._pingTimeoutTimer){clearTimeout(c._pingTimeoutTimer);c._pingTimeoutTimer=null;}
+      c._pingWait=false;
+    }
+
+    /* ── Immediate cleanup: called from the ping watchdog, from a native
+       ICE state change, or from PeerJS's own close/error events —
+       whichever fires first. Guarded so it only runs once per receiver. ── */
+    function finalizeServerDisconnect(){
+      if(c._finalized)return;
+      c._finalized=true;
+      c._dead=true;
+      stopPingSrv();
+      c._sendGen=(c._sendGen||0)+1; // aborts any in-flight srvSendNext/readChunk loop
+      c._srvSending=false;
+      serverConns=serverConns.filter(function(x){return x!==c;});
+      if(c._ackTimeoutTimer){clearTimeout(c._ackTimeoutTimer);c._ackTimeoutTimer=null;}
+      updateSrvClientsUI();
+      setStatus('status-server',t('msg_srv_disconnected',{num:c._recvNum}),'info');
+      if(c._ui){
+        c._ui.el.classList.add('disconnected');
+        c._ui.speedEl.textContent=t('conn_disconnected');
+        // Countdown display + auto-remove after 10s
+        var countdown=10;
+        c._ui.ackEl.className='srv-ack-badge waiting';
+        c._ui.ackEl.innerHTML=icoSvg('trash',11)+' '+t('countdown_remove',{s:countdown});
+        var tick=setInterval(function(){
+          countdown--;
+          if(!c._ui||!c._ui.el.parentNode){clearInterval(tick);return;}
+          if(countdown<=0){
+            clearInterval(tick);
+            var list=document.getElementById('srv-recv-list');
+            if(list&&c._ui.el.parentNode===list)list.removeChild(c._ui.el);
+            // Hide panel if no rows left
+            if(list&&list.children.length===0){
+              var panel=document.getElementById('srv-receivers-panel');
+              if(panel)panel.classList.remove('visible');
+            }
+          } else {
+            c._ui.ackEl.innerHTML=icoSvg('trash',11)+' '+t('countdown_remove',{s:countdown});
+          }
+        },1000);
+      }
+    }
+    function handleServerConnLost(){
+      if(c._finalized)return;
+      if(c._ui){
+        c._ui.ackEl.className='srv-ack-badge waiting';
+        c._ui.ackEl.innerHTML=icoSvg('alertTriangle',11)+' '+t('badge_conn_lost');
+      }
+      try{c.close();}catch(_){}
+      // c.close() may not synchronously trigger 'close' — finalize now regardless
+      finalizeServerDisconnect();
+    }
+
+    c.on('open',function(){
+      // Create the receiver row in the UI
+      c._ui=createReceiverRow(c._recvNum);
+      updateSrvClientsUI();
+      setStatus('status-server',t('msg_srv_connected',{num:c._recvNum}),'ok');
+      sendFilelistTo(c);
+      startPingSrv();
+      // Extra signal: react as soon as the underlying ICE link drops,
+      // instead of waiting on PeerJS's own (sometimes delayed) close event.
+      try{
+        var pc=c.peerConnection;
+        if(pc){
+          pc.addEventListener('iceconnectionstatechange',function(){
+            var st=pc.iceConnectionState;
+            if(st==='disconnected'||st==='failed'||st==='closed')handleServerConnLost();
+          });
+          pc.addEventListener('connectionstatechange',function(){
+            var st=pc.connectionState;
+            if(st==='disconnected'||st==='failed'||st==='closed')handleServerConnLost();
+          });
+        }
+      }catch(_){}
+    });
+
+    c.on('data',function(msg){
+      if(!msg||typeof msg.type!=='string')return;
+      if(msg.type==='ping'){try{c.send({type:'pong',t:msg.t});}catch(_){}return;}
+      if(msg.type==='pong'){
+        if(c._pingWait){
+          c._pingWait=false;
+          if(c._pingTimeoutTimer){clearTimeout(c._pingTimeoutTimer);c._pingTimeoutTimer=null;}
+        }
+        return;
+      }
+      if(msg.type==='request'){
+        var indices=Array.isArray(msg.indices)?msg.indices:[];
+        if(indices.length===0)return;
+        // Security: validate bounds, deduplicate, cap at 500 files
+        var seen=new Set();
+        var safeIndices=indices.filter(function(i){
+          if(typeof i!=='number'||!Number.isInteger(i)||i<0||i>=serverFileQueue.length)return false;
+          if(seen.has(i))return false;
+          seen.add(i);return true;
+        }).slice(0,500);
+        if(safeIndices.length===0)return;
+        c._srvQueue=safeIndices.map(function(i){return serverFileQueue[i]||null;}).filter(Boolean);
+        c._totalRequested=c._srvQueue.length;
+        c._ackCount=0;
+        c._srvIdx=0; // MUST reset — otherwise srvSendNext thinks the queue is already exhausted
+        // Increment generation to cancel any in-flight transfer from a previous request
+        c._sendGen=(c._sendGen||0)+1;
+        var currentGen=c._sendGen;
+        if(c._ackTimeoutTimer){clearTimeout(c._ackTimeoutTimer);c._ackTimeoutTimer=null;}
+        // Update ACK badge to "sending"
+        if(c._ui){
+          c._ui.ackEl.className='srv-ack-badge sending';
+          c._ui.ackEl.innerHTML=icoSvg('arrowRight',11)+' '+t('badge_sending');
+        }
+        if(c._srvQueue.length>0&&!c._srvSending){
+          c._srvSending=true;
+          srvSendNext(c,currentGen);
+        } else if(c._srvSending){
+          // Old in-flight transfer will detect the gen change and abort itself.
+          // Give it a tick to bail, then start the new gen.
+          c._srvSending=false;
+          setTimeout(function(){
+            if(!c._srvSending&&c._srvQueue.length>0){
+              c._srvSending=true;
+              srvSendNext(c,c._sendGen);
+            }
+          },50);
+        }
+        return;
+      }
+      // ACK from receiver — file confirmed received
+      if(msg.type==='ack'){
+        c._ackCount++;
+        if(c._ackTimeoutTimer){clearTimeout(c._ackTimeoutTimer);c._ackTimeoutTimer=null;}
+        if(c._ui){
+          var allDone=(c._totalRequested>0&&c._ackCount>=c._totalRequested);
+          if(allDone){
+            c._ui.ackEl.className='srv-ack-badge all-ok';
+            c._ui.ackEl.innerHTML=icoSvg('checkDouble',11)+' '+t('badge_all_ok');
+          } else {
+            c._ui.ackEl.className='srv-ack-badge partial';
+            c._ui.ackEl.innerHTML=icoSvg('check',11)+' '+t('badge_partial',{ack:c._ackCount,total:c._totalRequested});
+            // Restart timeout — still waiting for more acks
+            c._ackTimeoutTimer=setTimeout(function(){
+              if(c._ui&&c._ackCount<c._totalRequested){
+                c._ui.ackEl.className='srv-ack-badge waiting';
+                c._ui.ackEl.innerHTML=icoSvg('alertTriangle',11)+' '+t('badge_ack_timeout');
+                c._ui.ackEl.title=t('badge_ack_timeout_title',{ack:c._ackCount,total:c._totalRequested});
+              }
+            },60000);
+          }
+        }
+        setStatus('status-server',t('msg_srv_confirmed',{num:c._recvNum,ack:c._ackCount,total:c._totalRequested}),'ok');
+        return;
+      }
+      if(msg.type==='ack_all'){
+        if(c._ackTimeoutTimer){clearTimeout(c._ackTimeoutTimer);c._ackTimeoutTimer=null;}
+        if(c._ui){
+          c._ui.ackEl.className='srv-ack-badge all-ok';
+          c._ui.ackEl.innerHTML=icoSvg('checkDouble',11)+' '+t('badge_all_ok');
+          c._ui.pctEl.className='srv-recv-pct done';
+          c._ui.bar.className='srv-recv-bar done';
+          c._ui.speedEl.textContent='';
+          c._ui.ackEl.title='';
+        }
+        setStatus('status-server',t('msg_srv_complete',{num:c._recvNum}),'ok');
+        return;
+      }
+    });
+
+    c.on('close',function(){finalizeServerDisconnect();});
+    c.on('error',function(){finalizeServerDisconnect();});
+  }
+
+  function sendFilelistTo(c){
+    var list=serverFileQueue.map(function(entry,i){
+      return {name:entry.file.name,size:entry.file.size,idx:i};
+    });
+    try{c.send({type:'filelist',files:list});}catch(e){}
+  }
+
+  function broadcastFilelist(){
+    serverConns.forEach(function(c){if(c.open)sendFilelistTo(c);});
+  }
+
+  function updateSrvClientsUI(){
+    var active=serverConns.filter(function(c){return c.open;}).length;
+    var badge=document.getElementById('srv-clients-badge');
+    if(badge){
+      badge.textContent=t('srv_connected_count',{n:active});
+      badge.className='srv-clients-badge'+(active>0?' active':'');
+    }
+    var cbr=document.getElementById('conn-bar');
+    if(cbr)cbr.style.display='flex';
+    if(active>0){
+      setConnState('ok',t('conn_n_receivers',{n:active}),'');
+    } else {
+      setConnState('waiting',t('conn_waiting_receivers'));
+    }
+  }
+
+  /* ── Server: send files to a specific connection ── */
+  function srvSendNext(c,gen){
+    if(gen!==c._sendGen){c._srvSending=false;return;}
+    while(c._srvIdx<c._srvQueue.length){
+      var entry=c._srvQueue[c._srvIdx];
+      if(entry&&entry.el&&(entry.el.classList.contains('done')||entry.el.classList.contains('confirmed'))){
+        c._srvIdx++;continue;
+      }
+      break;
+    }
+    if(c._srvIdx>=c._srvQueue.length){
+      c._srvSending=false;
+      // Start ACK timeout — if receiver doesn't confirm within 2 min, warn
+      if(c._ackCount<c._totalRequested){
+        if(c._ackTimeoutTimer)clearTimeout(c._ackTimeoutTimer);
+        c._ackTimeoutTimer=setTimeout(function(){
+          if(c._ui&&c._ackCount<c._totalRequested){
+            c._ui.ackEl.className='srv-ack-badge waiting';
+            c._ui.ackEl.innerHTML=icoSvg('alertTriangle',11)+' '+t('badge_ack_timeout');
+            c._ui.ackEl.title=t('badge_ack_timeout_2min_title');
+          }
+        },120000);
+      }
+      return;
+    }
+    var entry=c._srvQueue[c._srvIdx];
+    var f=entry.file;
+    var totalFiles=c._srvQueue.length;
+
+    // Update receiver UI: new file starting
+    if(c._ui){
+      c._ui.fnEl.textContent=truncName(f.name)+' ('+(c._srvIdx+1)+'/'+totalFiles+')';
+      c._ui.bar.className='srv-recv-bar';
+      c._ui.bar.style.transform='scaleX(0)';
+      c._ui.pctEl.className='srv-recv-pct';
+      c._ui.pctEl.textContent='0%';
+      c._ui.ackEl.className='srv-ack-badge sending';
+      c._ui.ackEl.innerHTML=icoSvg('arrowRight',11)+' '+t('badge_sending_dots');
+      c._speedT0=0;c._speedBytes0=0;
+    }
+
+    var doSend=async function(){
+      if(!c||!c.open||gen!==c._sendGen){c._srvSending=false;return;}
+
+      // ── SHA-256 hashing (if enabled) — use cached hash if already computed ──
+      var hash=null;
+      if(srvShaEnabled){
+        if(entry._cachedHash!==undefined){
+          hash=entry._cachedHash;
+          if(entry.shaEl){
+            if(hash){
+              entry.shaEl.className='sha-badge ok';
+              entry.shaEl.textContent='#'+hash.substring(0,8)+'…';
+              entry.shaEl.title='SHA-256: '+hash;
+            } else {
+              entry.shaEl.className='sha-badge waiting';
+              entry.shaEl.textContent=f.size>SHA_MAX_BYTES?'> 500 MB':t('sha_hash_err');
+            }
+          }
+        } else {
+          if(entry.shaEl){entry.shaEl.className='sha-badge hashing';entry.shaEl.textContent=t('sha_hashing');}
+          try{hash=await computeFileHash(f);}catch(_){hash=null;}
+          entry._cachedHash=hash; // always cache — avoids re-hashing for subsequent receivers
+          if(entry.shaEl){
+            if(hash){
+              entry.shaEl.className='sha-badge ok';
+              entry.shaEl.textContent='#'+hash.substring(0,8)+'…';
+              entry.shaEl.title='SHA-256: '+hash;
+            } else if(f.size>SHA_MAX_BYTES){
+              entry.shaEl.className='sha-badge waiting';entry.shaEl.textContent='> 500 MB';
+              entry.shaEl.title=t('sha_too_large_verify');
+            } else {
+              entry.shaEl.className='sha-badge err';entry.shaEl.textContent=t('sha_hash_err');
+            }
+          }
+        }
+      } else if(entry.shaEl){
+        entry.shaEl.className='sha-badge waiting';entry.shaEl.textContent='—';
+      }
+
+      if(!c||!c.open||gen!==c._sendGen){c._srvSending=false;return;}
+
+      var metaMsg={type:'meta',name:f.name,size:f.size,
+        idx:c._srvIdx,total:totalFiles,resumeOffset:0,
+        hash:hash,sha:srvShaEnabled&&hash!==null};
+      try{c.send(metaMsg);}catch(e){c._srvSending=false;return;}
+
+      if(f.size===0){
+        c._srvIdx++;setTimeout(function(){srvSendNext(c,gen);},50);return;
+      }
+
+      var offset=0;
+      var connRef=c;
+
+      function readChunk(){
+        if(!connRef||!connRef.open||gen!==connRef._sendGen){connRef._srvSending=false;return;}
+        if(offset>=f.size){
+          // File fully sent — update receiver UI
+          if(connRef._ui){
+            connRef._ui.bar.style.transform='scaleX(1)';
+            connRef._ui.pctEl.textContent='100%';
+            connRef._ui.ackEl.className='srv-ack-badge waiting';
+            connRef._ui.ackEl.innerHTML=icoSvg('clock',11)+' '+t('badge_waiting');
+            connRef._ui.speedEl.textContent='';
+          }
+          connRef._srvIdx++;
+          setTimeout(function(){srvSendNext(connRef,gen);},50);
+          return;
+        }
+        var slice=f.slice(offset,offset+CHUNK);
+        var reader=new FileReader();
+        reader.onload=function(ev){
+          if(!connRef||!connRef.open||gen!==connRef._sendGen){connRef._srvSending=false;return;}
+          var buf=ev.target.result;
+          offset+=buf.byteLength;
+          try{connRef.send(buf);}
+          catch(e){connRef._srvSending=false;return;}
+
+          // Update per-receiver progress bar
+          if(connRef._ui&&f.size>0){
+            var p=offset/f.size;
+            connRef._ui.bar.style.transform='scaleX('+p+')';
+            connRef._ui.pctEl.textContent=Math.round(p*100)+'%';
+            // Speed calculation
+            var now=performance.now();
+            if(connRef._speedT0===0){connRef._speedT0=now;connRef._speedBytes0=offset;}
+            else {
+              var dt=(now-connRef._speedT0)/1000;
+              if(dt>=0.5){
+                var rate=(offset-connRef._speedBytes0)/dt;
+                connRef._speedT0=now;connRef._speedBytes0=offset;
+                connRef._ui.speedEl.textContent=rate>1048576?(rate/1048576).toFixed(1)+' MB/s':(rate/1024).toFixed(0)+' KB/s';
+              }
+            }
+          }
+
+          scheduleNextChunkSrv(connRef,readChunk);
+        };
+        reader.onerror=function(){
+          connRef._srvSending=false;
+          if(connRef._ui){connRef._ui.ackEl.className='srv-ack-badge waiting';connRef._ui.ackEl.innerHTML=icoSvg('alertTriangle',11)+' '+t('badge_read_err');}
+          setStatus('status-server',t('msg_srv_read_error',{num:connRef._recvNum}),'err');
+        };
+        reader.readAsArrayBuffer(slice);
+      }
+      readChunk();
+    };
+    doSend().catch(function(e){
+      console.error('srvSendNext error:',e);
+      c._srvSending=false;
+      if(c._ui){c._ui.ackEl.className='srv-ack-badge waiting';c._ui.ackEl.innerHTML=icoSvg('alertTriangle',11)+' '+t('badge_error');}
+    });
+  }
+
+  function scheduleNextChunkSrv(c,fn){
+    var dc=c&&c.dataChannel;
+    if(!dc){setTimeout(fn,8);return;}
+    if(dc.bufferedAmount>HIGH_WATER){
+      dc.bufferedAmountLowThreshold=LOW_WATER;
+      dc.onbufferedamountlow=function(){dc.onbufferedamountlow=null;if(c&&c.open)fn();};
+    } else {
+      setTimeout(fn,8);
+    }
+  }
+
+  /* ── Server: file management ── */
+  function onSrvFilesSelected(files){
+    addSrvFiles(files);
+    var inp=document.getElementById('srv-file-input');
+    if(inp)inp.value='';
+  }
+
+  function addSrvFiles(files){
+    var q=document.getElementById('srv-queue');
+    for(var i=0;i<files.length;i++){
+      var f=files[i];
+      var isDupe=serverFileQueue.some(function(e){
+        return e.file.name===f.name&&e.file.size===f.size&&e.file.lastModified===f.lastModified;
+      });
+      if(isDupe)continue;
+      var parts=makeSrvItem(f);
+      q.appendChild(parts.el);
+      serverFileQueue.push({file:f,el:parts.el,barEl:parts.barEl,stEl:parts.stEl,shaEl:parts.shaEl});
+    }
+    updateSrvQueueCount();
+    // Notify already-connected receivers about updated list
+    broadcastFilelist();
+  }
+
+  function makeSrvItem(f){
+    var item=document.createElement('div');item.className='fq-item';
+    var stEl=document.createElement('span');stEl.className='fq-st';stEl.textContent=t('st_ready');
+    stEl.style.color='var(--cyan)';
+    var shaEl=document.createElement('span');shaEl.className='sha-badge waiting';shaEl.textContent='—';
+    item.innerHTML='<span class="fq-icon-sm">'+icoSvg('file',14)+'</span>'
+      +'<span class="fq-name">'+escHtml(truncName(f.name))+'</span>'
+      +'<span class="fq-size">'+fmtB(f.size)+'</span>';
+    item.appendChild(stEl);
+    item.appendChild(shaEl);
+    var rmBtn=document.createElement('button');
+    rmBtn.className='fq-remove';rmBtn.innerHTML=icoSvg('x',11);rmBtn.title=t('remove_label');
+    rmBtn.onclick=function(){removeSrvItem(item);};
+    item.appendChild(rmBtn);
+    return {el:item,barEl:null,stEl:stEl,shaEl:shaEl};
+  }
+
+  function removeSrvItem(itemEl){
+    var idx=serverFileQueue.findIndex(function(e){return e.el===itemEl;});
+    if(idx===-1)return;
+    serverFileQueue.splice(idx,1);
+    var q=document.getElementById('srv-queue');
+    if(q&&itemEl.parentNode===q)q.removeChild(itemEl);
+    updateSrvQueueCount();
+    broadcastFilelist();
+  }
+
+  function updateSrvQueueCount(){
+    var el=document.getElementById('srv-queue-count');
+    if(!el)return;
+    var n=serverFileQueue.length;
+    if(n===0){el.classList.add('hidden');return;}
+    el.classList.remove('hidden');
+    el.textContent=t('srv_files_count',{n:n});
+  }
+
+  function copyCodeSrv(){
+    var el=document.getElementById('srv-code');
+    var text=el.textContent.replace(/\s/g,'');
+    var prev=el.textContent;
+    if(!text||!/^[A-HJ-NP-Z2-9]{6}$/.test(text))return;
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){
+        el.textContent=t('clipboard_copied');setTimeout(function(){el.textContent=prev;},1200);
+      }).catch(function(){fallbackCopySrv(text,el,prev);});
+    } else {fallbackCopySrv(text,el,prev);}
+  }
+  function fallbackCopySrv(text,el,prev){
+    var ta=document.createElement('textarea');ta.value=text;
+    ta.style.cssText='position:fixed;opacity:0;';document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');el.textContent=t('clipboard_copied');}
+    catch(e){el.textContent=t('clipboard_manual');}
+    document.body.removeChild(ta);setTimeout(function(){el.textContent=prev;},1200);
+  }
+
+  /* ════════════════════════════════════════════════════════
+     RECEIVER — FILELIST (SERVER MODE)
+  ════════════════════════════════════════════════════════ */
+  var _rflFiles=[];   // [{name,size,idx}] received from server
+  var _rflConn=null;  // reference to the active connection
+  var _rflDownloaded=new Set(); // names of files already downloaded this session
+  var _rflGeneration=0; // incremented each time showRecvFilelist starts — stale runs abort
+
+  async function showRecvFilelist(files,c){
+    var gen=++_rflGeneration; // capture generation for this call
+    _rflFiles=files;
+    _rflConn=c;
+    document.getElementById('recv-dropzone').classList.add('hidden');
+    document.getElementById('recv-filelist').style.display='flex';
+    var list=document.getElementById('rfl-list');
+    list.innerHTML='';
+
+    // ── Check which files already exist on disk (if a folder is selected) ──
+    var onDisk=new Set();
+    if(dirHandle){
+      setStatus('status-receiver',t('msg_checking_folder'),'');
+      await Promise.all(files.map(async function(f){
+        try{
+          var fh=await dirHandle.getFileHandle(sanitizeFilename(f.name));
+          // Also verify size matches — partial/corrupt files shouldn't be skipped
+          var existing=await fh.getFile();
+          if(existing.size===f.size)onDisk.add(f.name);
+        }catch(_){/* file not found — normal */}
+      }));
+    }
+    // Abort if a newer call superseded us during the async disk check
+    if(gen!==_rflGeneration)return;
+
+    files.forEach(function(f){
+      var alreadyDone=_rflDownloaded.has(f.name)||onDisk.has(f.name);
+      var isOnDisk=onDisk.has(f.name)&&!_rflDownloaded.has(f.name);
+      var row=document.createElement('div');row.className='rfl-item';
+      if(alreadyDone)row.dataset.done='1';
+      var cb=document.createElement('input');
+      cb.type='checkbox';cb.className='rfl-cb';cb.checked=!alreadyDone;
+      cb.onchange=function(){rflUpdateCount();row.classList.toggle('selected',cb.checked);};
+      var icon=document.createElement('span');icon.className='rfl-icon';
+      icon.innerHTML=alreadyDone?icoSvg('check',14):icoSvg('file',14);
+      if(alreadyDone)icon.style.color='var(--green)';
+      var name=document.createElement('span');name.className='rfl-name';name.textContent=f.name;
+      name.title=f.name;
+      if(alreadyDone)name.style.color='var(--dim)';
+      var size=document.createElement('span');size.className='rfl-size';size.textContent=fmtB(f.size);
+      if(alreadyDone){
+        var doneTag=document.createElement('span');
+        doneTag.style.cssText='font-size:0.48rem;font-weight:700;letter-spacing:.08em;flex-shrink:0;display:inline-flex;align-items:center;gap:0.15rem;';
+        if(isOnDisk){
+          doneTag.style.color='var(--cyan)';
+          doneTag.innerHTML=icoSvg('folder',10)+' '+t('ondisk_label');
+          doneTag.title=t('ondisk_title');
+        } else {
+          doneTag.style.color='var(--green)';
+          doneTag.innerHTML=icoSvg('check',10)+' '+t('st_done');
+        }
+        row.appendChild(cb);row.appendChild(icon);row.appendChild(name);row.appendChild(doneTag);
+      } else {
+        row.appendChild(cb);row.appendChild(icon);row.appendChild(name);row.appendChild(size);
+        row.classList.add('selected');
+      }
+      row.onclick=function(e){if(e.target===cb)return;cb.checked=!cb.checked;cb.dispatchEvent(new Event('change'));};
+      list.appendChild(row);
+    });
+
+    rflUpdateCount();
+    var remaining=files.filter(function(f){return!_rflDownloaded.has(f.name)&&!onDisk.has(f.name);}).length;
+    var allSkipped=new Set([..._rflDownloaded,...onDisk]);
+    var skippedCount=files.filter(function(f){return allSkipped.has(f.name);}).length;
+    var msg=remaining>0
+      ? t('msg_files_to_download',{remaining:remaining})+(skippedCount>0?t('msg_skipped_present',{skipped:skippedCount}):'')
+      : t('msg_all_present');
+    setStatus('status-receiver',msg,'ok');
+  }
+
+  function rflUpdateCount(){
+    var rows=document.getElementById('rfl-list').querySelectorAll('.rfl-cb');
+    var selected=0;rows.forEach(function(cb){if(cb.checked)selected++;});
+    var countEl=document.getElementById('rfl-sel-count');
+    if(countEl)countEl.innerHTML=t('rfl_selected_count',{n:selected});
+    var btn=document.getElementById('btn-rfl-download');
+    if(btn)btn.disabled=(selected===0);
+  }
+
+  function rflSelectAll(val){
+    var rows=document.getElementById('rfl-list').querySelectorAll('.rfl-item');
+    rows.forEach(function(row){
+      var cb=row.querySelector('.rfl-cb');
+      if(!cb)return;
+      // "Select all" skips items already done/on-disk — "Deselect all" deselects everything
+      if(val&&row.dataset.done==='1')return;
+      cb.checked=val;row.classList.toggle('selected',val);
+    });
+    rflUpdateCount();
+  }
+
+  function rflStartDownload(){
+    if(!_rflConn||!_rflConn.open){
+      setStatus('status-receiver',t('msg_conn_lost_download'),'err');return;
+    }
+    var rows=document.getElementById('rfl-list').querySelectorAll('.rfl-cb');
+    var indices=[];
+    rows.forEach(function(cb,i){
+      if(cb.checked&&_rflFiles[i]!==undefined)indices.push(_rflFiles[i].idx);
+    });
+    if(indices.length===0)return;
+    // Hide selection panel, show recv queue + header
+    document.getElementById('recv-filelist').style.display='none';
+    document.getElementById('recv-table-header').style.display='grid';
+    document.getElementById('recv-queue').style.display='flex';
+    setStatus('status-receiver',t('msg_downloading_n',{n:indices.length}),'');
+    try{_rflConn.send({type:'request',indices:indices});}catch(e){
+      setStatus('status-receiver',t('msg_error_sending_request',{err:e.message||e}),'err');
+    }
+  }
+
+
+  function saveBlob(meta,chunks,itemRef){
+    var ext=(meta.name||'').split('.').pop().toLowerCase();
+    // Executable/injectable types must not be served with their native MIME
+    // — browser could execute them if the user navigates to the blob URL
+    var DANGEROUS_EXTS={
+      html:1,htm:1,xhtml:1,shtml:1,
+      js:1,mjs:1,jsx:1,ts:1,tsx:1,
+      svg:1,               // SVG can embed scripts
+      xml:1,               // XML + XSLT can execute
+      vbs:1,wsf:1,wsh:1,  // Windows script
+      py:1,rb:1,pl:1,sh:1,bash:1,zsh:1,fish:1,
+      bat:1,cmd:1,ps1:1,psm1:1,psd1:1,
+      exe:1,dll:1,com:1,msi:1,app:1,dmg:1,pkg:1,
+      php:1,asp:1,aspx:1,jsp:1,cgi:1
+    };
+    var mimeMap={
+      pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',
+      gif:'image/gif',webp:'image/webp',
+      mp4:'video/mp4',webm:'video/webm',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',
+      zip:'application/zip',gz:'application/gzip','7z':'application/x-7z-compressed',
+      tar:'application/x-tar',rar:'application/vnd.rar',
+      json:'application/json',txt:'text/plain',csv:'text/plain',
+      css:'text/css',
+      doc:'application/msword',
+      docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf'
+    };
+    // Any dangerous or unknown type → binary download, never executable
+    var mimeType=DANGEROUS_EXTS[ext]?'application/octet-stream':(mimeMap[ext]||'application/octet-stream');
+    var blob=new Blob(chunks,{type:mimeType});
+    var url=URL.createObjectURL(blob);
+    var safeName=sanitizeFilename(meta.name);
+    if(itemRef){
+      itemRef.el.classList.remove('active');itemRef.el.classList.add('done');
+      var a=document.createElement('a');
+      a.className='fq-st done';a.style.cssText='text-decoration:none;display:inline-flex;align-items:center;gap:0.15rem;';
+      a.href=url;a.download=safeName;a.innerHTML=icoSvg('download',12)+' '+t('dl_label');
+      itemRef.stEl.replaceWith(a);
+    }
+    var a2=document.createElement('a');a2.href=url;a2.download=safeName;
+    document.body.appendChild(a2);a2.click();document.body.removeChild(a2);
+    // Track URL for centralized revocation (see _pendingBlobUrls at top)
+    var revokeTimer=setTimeout(function(){URL.revokeObjectURL(url);_pendingBlobUrls.delete(url);},300000);
+    _pendingBlobUrls.set(url,revokeTimer);
+    setStatus('status-receiver',t('msg_file_received',{name:truncName(meta.name)}),'ok');
+    playSuccessSound();
+  }
+
+  /* ════════════════════════════════════════════════════════
+     BOOTSTRAP — icônes statiques + langue au chargement
+  ════════════════════════════════════════════════════════ */
+  (function bootstrapIcons(){
+    var staticIcons={
+      'ico-role-receive':['download',24],
+      'ico-role-server':['server',24],
+      'ico-edge':['bulb',16],
+      'ico-dir-choose':['folder',13],
+      'ico-dir-clear':['x',12],
+      'ico-clear-recv':['trash',13],
+      'ico-expand':['settings',13],
+      'ico-rfl-download':['download',14],
+      'ico-recv-dz':['download',26],
+      'ico-done':['check',16],
+      'ico-srv-recv-title':['users',13],
+      'ico-srv-dz':['upload',26]
+    };
+    Object.keys(staticIcons).forEach(function(id){
+      var el=document.getElementById(id);
+      if(el)el.innerHTML=icoSvg(staticIcons[id][0],staticIcons[id][1]);
+    });
+  })();
+
+  applyI18n();
+</script>
+</body>
+</html>
